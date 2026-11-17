@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-electron/
+*.log
+.DS_Store
+.test-build
+data/
+# generated web assets copied in by `npx cap sync android`
+android/app/src/main/assets/public/
+# generated android output
+android/app/build/
+android/.gradle/
+android/local.properties
+# release signing material — never commit
+android/keystore.properties
+*.jks
+*.keystore

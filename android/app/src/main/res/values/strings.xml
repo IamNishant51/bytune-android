@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ByTune</string>
+    <string name="title_activity_main">ByTune</string>
+    <string name="package_name">com.bytune.music</string>
+    <string name="custom_url_scheme">com.bytune.music</string>
+</resources>

@@ -1,0 +1,131 @@
+{
+  "name": "bytune-android",
+  "productName": "ByTune",
+  "private": true,
+  "version": "1.0.1",
+  "author": "ByTune",
+  "description": "ByTune for Android (Capacitor build of the ByTune renderer). Desktop Electron app lives upstream.",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "build:potoken": "esbuild src/mobile/potoken-page.ts --bundle --format=iife --minify --outfile=android/app/src/main/assets/potoken.js",
+    "dev:renderer": "vite",
+    "sync": "npm run build && npx cap sync android",
+    "apk": "npm run sync && cd android && gradle assembleRelease"
+  },
+  "build": {
+    "appId": "com.bytune.music",
+    "productName": "ByTune",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "build/icon.png",
+      "build/icon.ico"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "artifactName": "ByTune-Setup.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.music",
+      "artifactName": "ByTune-${version}-${arch}.${ext}",
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "LSMinimumSystemVersion": "11.0.0",
+        "NSHighResolutionCapable": true,
+        "NSPrincipalClass": "NSApplication",
+        "NSSupportsAutomaticGraphicsSwitching": true,
+        "CFBundleDisplayName": "ByTune"
+      }
+    },
+    "dmg": {
+      "title": "ByTune ${version}",
+      "artifactName": "ByTune-${version}-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "protocols": [
+      {
+        "name": "ByTune",
+        "schemes": [
+          "bytune"
+        ]
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "ByTune"
+    }
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.2",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^44.3.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "lucide-react": "^0.468.0",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "wait-on": "^8.0.1",
+    "youtubei.js": "^18.0.0",
+    "zustand": "^5.0.2"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.2",
+    "@capacitor/core": "^6.2.2",
+    "@supabase/supabase-js": "^2.116.0",
+    "bgutils-js": "^4.0.3",
+    "jsdom": "^29.1.1",
+    "music-metadata": "^11.15.0"
+  }
+}

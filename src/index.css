@@ -1,0 +1,2263 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   ByTune — global styles & design-system utilities
+   Apple-Music visual language, desktop-scale.
+   ============================================================ */
+
+:root {
+  color-scheme: dark;
+  /* Primary is pure white in dark theme: the shell is monochrome
+     and artwork tinting is the only colour the app ever introduces. */
+  --accent: 255 255 255;
+  /* Semantic surfaces + ink as variables (single dark theme). */
+  --base: 0 0 0;
+  --surface: 13 13 15;
+  --panel: 28 28 30;
+  --elevated: 44 44 46;
+  --primary: 255 255 255;
+  --on-primary: 0 0 0;
+  --ink-hi: 255 255 255;
+  --ink: 255 255 255;
+  --ink-dim: 142 142 147;
+  --ink-faint: 255 255 255;
+  --ink-ghost: 255 255 255;
+  /* artwork-derived ambience (R G B) — set from the current track's artwork.
+     The fallback is a neutral grey, never a brand hue, so an unread sleeve
+     leaves the canvas black rather than tinting it. */
+  --ambient-0: 60 60 64;
+  --ambient-1: 40 40 44;
+  --surface-base: #000000;
+  /* Per-page ArtworkPalette — set by lib/palette.ts on the content host.
+     The shell stays monochrome; these are how album/playlist/artist pages
+     (and the NowPlaying overlay) inherit the artwork's own colours. */
+  --page-bg: 13 13 15;
+  --page-wash: 13 13 15;
+  --page-elevated: 28 28 30;
+  --page-accent: 255 255 255;
+  --page-on: 255 255 255;
+  --page-on-variant: 142 142 147;
+  --page-divider: 255 255 255;
+  /* Hairlines, taken straight from LiquidGlass.kt:76-77 (white @ 0.10 for
+     glass edges) and Common.kt:80 (white @ 0.15 for artwork borders). */
+  --hairline: 255 255 255;
+  --hairline-alpha: 0.10;
+  --hairline-strong-alpha: 0.15;
+  /* Selection pill / active-row tint — the same primary @ 0.14 used by
+     FloatingBottomBar.kt:234 and Common.kt:452. */
+  --selected-tint-alpha: 0.14;
+  /* Liquid Glass material (see "glass surfaces" below). One set of numbers
+     for every pane of glass, so the chrome never drifts apart. */
+  --lg-tint: 10 10 13;
+  --lg-tint-alpha: 0.44;
+  --lg-blur: 22px;
+  --lg-sat: 190%;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* ---------- frameless window chrome ---------- */
+/* The top bar is the drag surface (double-click = maximize toggle); every
+   interactive cluster inside opts back out so clicks land on controls. */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+body {
+  @apply bg-base text-ink antialiased font-sans;
+  overflow: hidden;
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.35);
+  color: #fff;
+}
+
+/* ---------- ambient atmosphere ---------- */
+/* Artwork-derived glow behind the whole app. Vars are set by lib/ambient.
+   Kept subtle — the canvas stays black and artwork tints it. */
+.ambient-root {
+  background:
+    radial-gradient(1200px 760px at 12% -14%, rgb(var(--ambient-0) / 0.10), transparent 62%),
+    radial-gradient(1000px 680px at 94% -10%, rgb(var(--ambient-1) / 0.08), transparent 58%),
+    radial-gradient(1500px 860px at 50% 122%, rgb(var(--ambient-0) / 0.045), transparent 62%),
+    var(--surface-base);
+}
+
+/* ---------- glass surfaces ----------
+   One optical recipe, shared by every pane of glass in the app. The layers
+   are the ones light actually meets, per Apple's Liquid Glass (WWDC25 §3,
+   plus the 26 refinement: darker edge, brighter specular highlights):
+
+     1. tint        the material's own colour, faintly informed by the
+                    artwork ambience (--ambient-0)
+     2. refraction  backdrop blur + saturation + a little contrast loss, so
+                    colour reads deeper *through* the glass than around it
+     3. fresnel     a masked 1px ring: bright where the surface turns away
+                    from the light, almost gone across the face. This is what
+                    reads as a thick edge instead of a painted rectangle
+     4. light       a 1px specular line on the top bevel, a dark line beneath,
+                    and a three-stop drop shadow for the float
+
+   The rim is a mask-composite ring, not a border: it follows any radius and
+   paints nothing extra. Deliberate ceiling: no displacement refraction
+   (backdrop-filter: url(#feDisplacementMap)). Chromium does support it, but
+   it costs a second backdrop pass per surface and the warp is only legible on
+   large sheets — revisit if glass ever covers a wide area. */
+.glass,
+.glass-pill,
+.glass-card,
+.mobile-player,
+.mobile-nav,
+.mobile-subview-bar {
+  position: relative;
+  isolation: isolate;
+  border: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.015) 44%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(120% 140% at 50% -20%, rgb(var(--ambient-0) / 0.10), transparent 70%),
+    rgb(var(--lg-tint) / var(--lg-tint-alpha));
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.05) contrast(0.97);
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.05) contrast(0.97);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.45),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    0 1px 1px rgba(0, 0, 0, 0.25),
+    0 10px 24px -6px rgba(0, 0, 0, 0.55),
+    0 28px 56px -28px rgba(0, 0, 0, 0.70);
+}
+
+/* Fresnel rim — the 1px light-catching edge. */
+.glass::before,
+.glass-pill::before,
+.glass-card::before,
+.glass-btn::before,
+.glass-strong::before,
+.mobile-player::before,
+.mobile-nav::before,
+.mobile-subview-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background:
+    linear-gradient(130deg, rgba(255, 255, 255, 0.58) 0%, rgba(255, 255, 255, 0.06) 30%, rgba(255, 255, 255, 0.02) 56%, rgba(255, 255, 255, 0.14) 82%, rgba(255, 255, 255, 0.46) 100%),
+    rgba(255, 255, 255, 0.10);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Cards set their own radius with utilities; this is the fallback so a bare
+   .glass-card still has one. */
+.glass-card {
+  border-radius: 20px;
+}
+
+/* Popovers, menus, dialogs — the same material, but effectively OPAQUE: a
+   floating menu is read over bright artwork and dense text, and nested glass
+   ancestors can silently drop the backdrop blur, so the base itself has to
+   hide the page. At 0.98 anything underneath contributes ~2%. */
+.glass-strong {
+  position: relative;
+  isolation: isolate;
+  border: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 60%),
+    rgba(17, 17, 19, 0.98);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 24px 64px -16px rgba(0, 0, 0, 0.75),
+    0 4px 16px -2px rgba(0, 0, 0, 0.30);
+}
+
+/* The search-bar dropdowns live inside the top bar's chrome-glass, whose own
+   backdrop-filter is a backdrop root — a translucent panel there can't sample
+   the page behind it and reads as washed-out. This variant is SOLID — the
+   same colour as the search field's bg-panel — wearing the popup chrome on
+   top, so it matches the floating menus without any transparency. */
+.glass-strong-solid {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 60%),
+    rgb(var(--panel));
+  border: none;
+  box-shadow: 0 24px 64px -16px rgba(0, 0, 0, 0.75), 0 4px 16px -2px rgba(0, 0, 0, 0.30);
+}
+
+/* Player bar — glass with a faint artwork tint at the top edge. */
+.player-glass {
+  background:
+    linear-gradient(180deg, rgb(var(--ambient-0) / 0.04), rgb(var(--ambient-1) / 0.015) 55%, transparent),
+    rgba(0, 0, 0, 0.86);
+  backdrop-filter: blur(28px) saturate(155%);
+  -webkit-backdrop-filter: blur(28px) saturate(155%);
+  border: none;
+  box-shadow: 0 -8px 24px -4px rgba(0, 0, 0, 0.50);
+}
+
+/* Top bar chrome — pure dark glass, no artwork bleed. */
+.chrome-glass {
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+}
+
+/* iOS 26-style fade under the top bar: content dissolves into chrome */
+.top-fade {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0.55) 45%, transparent);
+}
+
+/* Page tint — every content host inherits the per-page ArtworkPalette here.
+   Set by <PagePalette artwork={...}> via lib/palette.ts. */
+.page-tint {
+  background: rgb(var(--page-bg));
+  color: rgb(var(--page-on));
+  transition: background 260ms ease, color 260ms ease;
+}
+html.reduce-motion .page-tint,
+html.reduce-motion .page-tint * {
+  transition: none !important;
+}
+
+/* Home top wash — a deep, artwork-derived tint that fades down into the page.
+   `--home-tint` is a registered custom property, so hovering a quick-pick
+   morphs the wash to that artwork's colour smoothly instead of snapping
+   between two gradients. */
+@property --home-tint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgb(18 18 22);
+}
+
+/* The tint variable lives on <main> (set by TintWash) so any descendant can
+   read it — the wash, and the search filter bar's stuck backdrop, always
+   wear the same morphing colour. The transition is declared here, on the
+   element whose value changes, so every consumer inherits the animation. */
+main {
+  transition: --home-tint 600ms ease;
+  /* Hoist the view scroller's scroll timeline so the search band — which
+     lives outside the scroller — can animate to the same scroll position. */
+  timeline-scope: --view-scroll;
+}
+
+/* The scroll timeline the search band reads (see .search-band). */
+#view-scroll {
+  scroll-timeline-name: --view-scroll;
+  overflow-x: hidden !important;
+  contain: content;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+}
+
+.home-tint {
+  /* Spotify's wash: strong at the very top, fully gone by ~⅓ of the pane —
+     never a tall smudge reaching down the page. The noise dither (banding
+     fix) and the gradient fade out together through the mask, so nothing
+     ever ends on a hard horizontal edge. */
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.035 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E") repeat,
+    linear-gradient(180deg, var(--home-tint) 0%, transparent 85%);
+  -webkit-mask-image: linear-gradient(to bottom, black 30%, transparent 96%);
+  mask-image: linear-gradient(to bottom, black 30%, transparent 96%);
+}
+
+/* Frosted search band — rendered by App at panel level (see App.tsx for why
+   it lives outside the scroller). Pure backdrop blur, no painted colour, so
+   the page's artwork-tint wash shows through untinted. Its opacity rides
+   the view scroller's timeline: invisible at the top of the list, fully
+   painted after ~48px of scroll — no JS state to desync. */
+.search-band {
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  opacity: 0;
+  animation: sticky-backdrop-in linear both;
+  animation-timeline: --view-scroll;
+  animation-range: 0px 48px;
+}
+@keyframes sticky-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* No scroll-driven animation (unsupported engines): keep the band up. */
+@supports not (animation-timeline: scroll()) {
+  .search-band {
+    opacity: 1;
+  }
+}
+/* Same under reduce-motion: keep the band up. */
+html.reduce-motion .search-band {
+  animation: none;
+  opacity: 1;
+}
+
+html.reduce-motion .home-tint {
+  transition: none !important;
+}
+
+/* Drop feedback — a ring that blooms out of the row it landed on. */
+@keyframes drop-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgb(var(--accent) / 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 14px rgb(var(--accent) / 0);
+  }
+}
+
+.animate-drop-pulse {
+  animation: drop-pulse 0.6s ease-out;
+}
+
+/* Artwork inside draggable rows must never start its own native image
+   drag — a native drag swallows the click and freezes :hover app-wide. */
+img,
+video {
+  -webkit-user-drag: none;
+}
+
+/* Drag sources are always `draggable` (see lib/dnd.ts): media inside them
+   is hit-test-transparent so the WHOLE tile — center, edge, corner, title,
+   empty space — reports the same drag origin instead of the <img> under the
+   cursor winning on some pixels and losing on others. Interactive children
+   (buttons/links) keep their own hit-testing; only media is flattened. */
+[draggable="true"] img,
+[draggable="true"] video {
+  pointer-events: none;
+}
+
+/* Draggable rows/cards keep their contextual cursor on hover (pointer for
+   clickable tiles) — never a grab affordance. While an OS drag is actually
+   in flight the app wears grabbing everywhere, driven by the
+   `bytune-dragging` body flag useDrag sets in onDragStart/onDragEnd. */
+body.bytune-dragging,
+body.bytune-dragging * {
+  cursor: grabbing !important;
+}
+
+/* ---------- scrollbars (desktop feel) ----------
+   Themed exclusively via ::-webkit-scrollbar — do NOT set standard
+   scrollbar-width/scrollbar-color on themed elements: Chromium disables
+   all webkit scrollbar styling for them and falls back to the native
+   Windows scrollbar (arrows + gray thumb). */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-button,
+::-webkit-resizer {
+  display: none;
+  width: 0;
+  height: 0;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.18);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* horizontal shelves: slimmer bar that reveals itself on shelf hover */
+.shelf-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.shelf-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+  background-clip: content-box;
+  transition: background-color 0.2s ease;
+}
+.shelf-scroll:hover::-webkit-scrollbar-thumb,
+.shelf-scroll:focus-within::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.shelf-scroll {
+  scroll-behavior: smooth;
+}
+
+/* The main content scroller — Spotify's floating pill. The scroller itself
+   carries no background of its own (the rounded panel behind it is the only
+   surface), and the thumb floats a few pixels inside the panel edge instead
+   of hugging it. */
+.scroll-host {
+  background: transparent;
+  scrollbar-gutter: stable;
+}
+.scroll-host::-webkit-scrollbar {
+  width: 14px;
+}
+.scroll-host::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border: 5px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+.scroll-host::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.22);
+}
+.scroll-host::-webkit-scrollbar-track,
+.scroll-host::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* hide scrollbar but keep scrolling (pills rows) */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+/* ---------- range sliders (ThinSlider port) ----------
+   Idle is a hairline; the thumb only appears on hover, like the mobile
+   player's scrubber that thickens when engaged. */
+input[type="range"].slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #ffffff var(--fill, 0%),
+    rgba(255, 255, 255, 0.26) var(--fill, 0%),
+    rgba(255, 255, 255, 0.14) var(--buffered, var(--fill, 0%))
+  );
+  outline: none;
+  cursor: pointer;
+  transition: height 0.15s ease;
+}
+input[type="range"].slider:hover {
+  height: 6px;
+}
+/* Play-bar sliders (Spotify progress-bar clone): the input is a 12px hit
+   area; the visible track is a 4px line (2px radius, white @30%) via the
+   runnable-track pseudo, white fill, and a 12px white handle that only
+   shows on hover/press. */
+input[type="range"].slider.slider-thin,
+input[type="range"].slider.slider-bar {
+  height: 12px;
+  background: transparent;
+  transition: none;
+}
+input[type="range"].slider.slider-thin::-webkit-slider-runnable-track,
+input[type="range"].slider.slider-bar::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #ffffff var(--fill, 0%),
+    rgba(255, 255, 255, 0.3) var(--fill, 0%)
+  );
+}
+input[type="range"].slider.slider-thin::-webkit-slider-thumb,
+input[type="range"].slider.slider-bar::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: none;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.1s ease, transform 0.1s ease;
+}
+input[type="range"].slider.slider-thin:hover::-webkit-slider-thumb,
+input[type="range"].slider.slider-bar:hover::-webkit-slider-thumb,
+input[type="range"].slider.slider-thin:focus-visible::-webkit-slider-thumb,
+input[type="range"].slider.slider-bar:focus-visible::-webkit-slider-thumb,
+input[type="range"].slider.slider-thin:active::-webkit-slider-thumb,
+input[type="range"].slider.slider-bar:active::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1);
+}
+input[type="range"].slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.55), 0 0 0 4px rgba(255, 255, 255, 0.06);
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+input[type="range"].slider:hover::-webkit-slider-thumb,
+input[type="range"].slider:focus-visible::-webkit-slider-thumb,
+input[type="range"].slider:active::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1);
+}
+/* Settings sliders (playback speed, crossfade): a numeric value you read at
+   a glance, so the position dot is always on — unlike the play-bar scrubbers
+   that reveal their handle on hover only. */
+input[type="range"].slider.slider-dot::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------- floating mini player ---------- */
+/* Native PiP window entrance: a quick fade with a small rise + settle, so
+   the always-on-top window appears rather than pops (Spotify's open feel). */
+@keyframes pip-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-pip-in {
+  animation: pip-in 0.22s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-pip-in {
+    animation: none;
+  }
+}
+
+/* PiP like-burst — Spotify-style "added" animation when the + is clicked:
+   a big green check disc pops in over the small button while a dark ring
+   expands and green confetti squares fly outward, then everything fades and
+   the small green check state remains. Driven by short-lived overlay spans
+   in PipApp (each confetto aims via its own --tx/--ty/--rot vars). */
+@keyframes pip-like-pop {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  45% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
+  72% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+}
+@keyframes pip-like-ring {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.85;
+  }
+  100% {
+    /* ring element is 28px — scale 1.25 ends it at a 35px diameter */
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+@keyframes pip-like-confetti {
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(0.55);
+    opacity: 0;
+  }
+}
+
+/* PiP transport scaling — the controls row zooms with the native window size
+   (PipApp drives --pip-s from a ResizeObserver, 1.0 at the 300px default),
+   so buttons shrink before they can crowd the artwork edges on small windows
+   and grow proportionally on large ones. Scoped: only .pip-controls uses it. */
+.pip-controls {
+  zoom: var(--pip-s, 1);
+}
+
+/* Hero palette wash layer: the incoming gradient fades in over the previous
+   one so a track change never hard-cuts. Old layer is reaped by the component
+   once the fade completes. */
+@keyframes mp-hero-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.mp-hero-layer {
+  animation: mp-hero-in 380ms var(--ease-enter) both;
+}
+
+/* Compact seek slider — a 3px hairline in a 12px hit area; the 10px thumb
+   only surfaces on hover/press/focus, like the main bar's scrubber. */
+input[type="range"].slider.mp-slider {
+  height: 12px;
+  background: transparent;
+  transition: none;
+}
+input[type="range"].slider.mp-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #ffffff var(--fill, 0%),
+    rgba(255, 255, 255, 0.22) var(--fill, 0%)
+  );
+}
+input[type="range"].slider.mp-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  margin-top: -3.5px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: none;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.1s ease, transform 0.1s ease;
+}
+input[type="range"].slider.mp-slider:hover::-webkit-slider-thumb,
+input[type="range"].slider.mp-slider:focus-visible::-webkit-slider-thumb,
+input[type="range"].slider.mp-slider:active::-webkit-slider-thumb {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ---------- Apple Music tactile volume slider ---------- */
+input[type="range"].apple-volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"].apple-volume-slider::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(8px);
+}
+input[type="range"].apple-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.40);
+  transition: transform 0.12s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+input[type="range"].apple-volume-slider:active::-webkit-slider-thumb {
+  transform: scale(1.25);
+}
+
+/* ---------- equalizer bars (now-playing indicator) ---------- */
+@keyframes eq {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.eq-bar {
+  animation: eq 0.9s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+/* ---------- skeleton shimmer ---------- */
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.skeleton {
+  border-radius: 10px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.045) 25%,
+    rgba(255, 255, 255, 0.085) 37%,
+    rgba(255, 255, 255, 0.045) 63%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* ---------- artwork hairline ----------
+   A 1px white @ 15% edge on every artwork tile so light-edged covers
+   don't dissolve into the black canvas. */
+.art-hairline {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+  outline: 1px solid rgba(255, 255, 255, 0.12);
+  outline-offset: -1px;
+}
+
+/* ---------- beacon toasts ----------
+   Drop-down notification capsules. A darker, rounder, heavier glass than
+   .glass-strong so they float over any surface; the JSX adds a kind-coloured
+   ambience glow behind them. */
+.toast-beacon {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(255, 255, 255, 0.14) 0%, transparent 70%),
+    linear-gradient(165deg, rgba(54, 54, 58, 0.98), rgba(20, 20, 22, 0.98));
+  border: none;
+  backdrop-filter: blur(30px) saturate(160%);
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.35),
+    0 24px 56px -12px rgba(0, 0, 0, 0.85);
+}
+
+/* Arrival: falls from under the top bar with a blur that resolves and a
+   one-keyframe overshoot so the landing reads as a spring, not a slide. */
+@keyframes toast-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(-28px) scale(0.9);
+    filter: blur(6px);
+  }
+  55% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  74% {
+    transform: translateY(3px) scale(1.012);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+.toast-drop {
+  animation: toast-drop 0.55s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+/* Departure: lifted back up, defocusing as it goes. */
+@keyframes toast-lift {
+  to {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.93);
+    filter: blur(5px);
+  }
+}
+.toast-lift {
+  animation: toast-lift 0.34s cubic-bezier(0.55, 0, 0.85, 0.5) forwards;
+}
+
+/* Icon badge springs in just after the capsule lands. */
+@keyframes toast-icon-pop {
+  from {
+    transform: scale(0);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.toast-icon {
+  animation: toast-icon-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.14s backwards;
+}
+
+/* One-shot light sweep across the capsule on arrival. */
+@keyframes toast-sheen {
+  0% {
+    transform: translateX(-140%) skewX(-16deg);
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(320%) skewX(-16deg);
+    opacity: 0;
+  }
+}
+.toast-sheen {
+  animation: toast-sheen 0.9s cubic-bezier(0.3, 0, 0.2, 1) 0.18s both;
+}
+
+/* Errors give the capsule a short head-shake once it has landed. */
+@keyframes toast-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
+}
+.toast-shake {
+  animation: toast-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) 0.3s backwards;
+}
+
+/* Lifetime ring around the icon badge: depletes linearly over the toast's
+   duration; hover pauses it in sync with the JS timer. The offset must match
+   RING_C in Toasts.tsx (r = 16.75 on a 36px viewBox). */
+@keyframes toast-ring {
+  from {
+    stroke-dashoffset: 0px;
+  }
+  to {
+    stroke-dashoffset: 105.24px;
+  }
+}
+
+/* ---------- misc animations ---------- */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin-slow {
+  animation: spin-slow 14s linear infinite;
+}
+
+/* ---------- text helpers ---------- */
+.micro-label {
+  @apply text-[11px] font-semibold uppercase tracking-[0.18em];
+}
+
+/* Section chrome: bold, tightly tracked headline type */
+.section-title {
+  @apply font-display font-extrabold tracking-[-0.02em] text-ink-hi;
+}
+
+/* Focus rings are dropped entirely, Spotify-style. The app is pointer- and
+   shortcut-driven, every interactive element already carries its own hover /
+   active / selected treatment, and a lingering rectangle over artwork-tinted
+   surfaces (the fullscreen button after leaving full screen, the active lyric
+   line, the player-bar title, sidebar rows) reads as a rendering glitch, not
+   as focus. Inputs keep their own focus:border-* edge treatment. */
+:focus,
+:focus-visible {
+  outline: none;
+}
+::-moz-focus-inner {
+  border: 0;
+}
+
+/* Window maximize / restore settle. The OS zooms the window bitmap while the
+   layout snaps underneath to the new size, and that seam reads as a jarring
+   reflow — the thing the old title-bar double-click was punished for. A short
+   ease-out "settle" on the shell (a hair of scale and fade, applied when the
+   maximized state flips) masks the snap so the whole move reads as one smooth
+   motion. Removed on animationend so no transform lingers over the fixed
+   overlays; skipped entirely under reduced animation. */
+@keyframes win-settle {
+  from {
+    opacity: 0.94;
+    transform: scale(0.988);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.win-settle {
+  animation: win-settle 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+html.reduce-motion .win-settle {
+  animation: none;
+}
+
+/* ---------- appearance settings ----------
+   Mirrors the "Reduce animation" and "Reduce dynamic blur" switches:
+   both land as classes on <html> so every surface honours them without each
+   component reading the setting. */
+html.reduce-motion *,
+html.reduce-motion *::before,
+html.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Blur is what "reduce dynamic blur" removes; the glass keeps its tint and
+   rim so surfaces still read as elevated, just not translucent. Everything
+   that wears the material has to be listed here, or it goes see-through. */
+html.reduce-blur .glass,
+html.reduce-blur .glass-strong,
+html.reduce-blur .glass-pill,
+html.reduce-blur .glass-card,
+html.reduce-blur .glass-btn,
+html.reduce-blur .toast-beacon,
+html.reduce-blur .player-glass,
+html.reduce-blur .chrome-glass,
+html.reduce-blur .ob-card,
+html.reduce-blur .mobile-search input,
+html.reduce-blur .mobile-sheet,
+html.reduce-blur .mobile-subview-bar,
+html.reduce-blur .mobile-player,
+html.reduce-blur .mobile-nav {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html.reduce-blur .glass,
+html.reduce-blur .glass-strong,
+html.reduce-blur .glass-pill,
+html.reduce-blur .glass-card,
+html.reduce-blur .toast-beacon,
+html.reduce-blur .ob-card,
+html.reduce-blur .mobile-sheet,
+html.reduce-blur .mobile-subview-bar,
+html.reduce-blur .mobile-player,
+html.reduce-blur .mobile-nav {
+  background: rgb(var(--panel));
+}
+html.reduce-blur .player-glass,
+html.reduce-blur .chrome-glass {
+  background: rgba(0, 0, 0, 0.92);
+}
+html.reduce-blur .top-fade {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.92), transparent);
+}
+
+/* ---------- Apple Music Liquid Glass — composition & interaction ----------
+   The material is the shared recipe above (tint · refraction · fresnel rim ·
+   light). This block only places the floating chrome and gives it the
+   behaviour: press illumination, the sliding tab lens, the sheet's heavier
+   tint, and the search field's focus bevel. */
+html.liquid-glass .mobile-chrome-dock {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+  transform: translateZ(0);
+}
+html.liquid-glass .mobile-chrome-dock > div {
+  width: 100%;
+  max-width: 480px;
+  padding-inline: 14px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom, 10px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+/* Player pill. Press illuminates the material from within (Apple: glass
+   brightens under a finger) and sinks it 2%. Nothing else moves.
+   The tint floor is higher than a raw material sample would be: the pill sits
+   over scrolling text, and at 0.44 the lines behind stayed readable. */
+html.liquid-glass .mobile-player {
+  --lg-tint-alpha: 0.52;
+  --lg-blur: 26px;
+  height: 58px;
+  border-radius: 20px;
+  padding: 0 10px 0 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transform: translateZ(0);
+  will-change: transform;
+  contain: layout style;
+  transition: transform 180ms var(--apple-spring-fluid), filter 180ms ease-out;
+}
+html.liquid-glass .mobile-player:active {
+  transform: scale(0.98) translateZ(0);
+  filter: brightness(1.10);
+}
+
+/* Progress hairline, inset so it rides the pill's bottom curve. */
+html.liquid-glass .mobile-player-progress {
+  inset: auto 12px 0 12px;
+  height: 2px;
+}
+html.liquid-glass .mobile-player-progress > span {
+  transition: width 240ms linear;
+}
+html.liquid-glass .mobile-player-art {
+  border-radius: 10px;
+}
+
+/* Transport: a small glass lens of its own, one step brighter than the pill. */
+html.liquid-glass .mobile-player-play {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.16) !important;
+  color: #ffffff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.30),
+    0 3px 10px rgba(0, 0, 0, 0.30) !important;
+  transition: transform 140ms var(--apple-spring-bounce), filter 140ms ease-out;
+}
+html.liquid-glass .mobile-player-play:active {
+  transform: scale(0.92) !important;
+  filter: brightness(1.15) !important;
+}
+
+/* Nav capsule + the sliding lens that marks the active tab. The lens is a
+   second, smaller pane of glass: same rim, brighter fill, so the selection
+   reads as light trapped under the surface rather than a grey rectangle.
+   The capsule carries a little more tint than the player: it sits over
+   artwork at the screen edge, where white labels have to stay legible. */
+html.liquid-glass .mobile-nav {
+  --lg-tint-alpha: 0.54;
+  --lg-blur: 26px;
+  height: 56px;
+  border-radius: 28px;
+  padding: 0 4px;
+  overflow: hidden;
+  transform: translateZ(0);
+  will-change: transform;
+  contain: layout style;
+}
+.mobile-tab-indicator {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 0;
+  border-radius: 23px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06) 55%, rgba(255, 255, 255, 0.10));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.28),
+    0 2px 8px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  z-index: 1;
+  transition: transform 260ms var(--apple-spring-fluid), width 260ms var(--apple-spring-fluid);
+  will-change: transform;
+}
+
+html.liquid-glass .mobile-tab svg {
+  transition: transform 220ms var(--apple-spring-bounce);
+}
+html.liquid-glass .mobile-tab.is-active svg {
+  transform: scale(1.06);
+}
+/* The sliding lens is the press feedback; a grey flash on top of it would
+   read as a second, dirtier highlight. */
+html.liquid-glass .mobile-tab:active {
+  background: transparent;
+}
+
+/* Sheets are large panes: the tint has to carry legibility on its own, so the
+   material goes nearly solid (Apple's "recedes and grows more opaque as focus
+   shifts to it"). It scrolls, so the edge light is painted as a background
+   gradient rather than a mask ring — that stays put while the content moves. */
+html.liquid-glass .mobile-sheet {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.10) 0, rgba(255, 255, 255, 0.02) 2px, rgba(255, 255, 255, 0) 40px),
+    rgb(16 16 20 / 0.92);
+  backdrop-filter: blur(30px) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(30px) saturate(var(--lg-sat));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    0 -18px 48px rgba(0, 0, 0, 0.72);
+}
+
+/* Search field: a glass capsule. The bevel brightens on focus instead of the
+   whole field flooding lighter. */
+html.liquid-glass .mobile-search input {
+  height: 44px;
+  border-radius: 9999px;
+  background: rgb(var(--lg-tint) / 0.55);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.10),
+    0 2px 10px rgba(0, 0, 0, 0.35);
+}
+html.liquid-glass .mobile-search input:focus {
+  background: rgb(var(--lg-tint) / 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.34),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.18),
+    0 2px 14px rgba(0, 0, 0, 0.40);
+}
+
+.glass-btn {
+  position: relative;
+  isolation: isolate;
+  background: rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: none !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 4px 16px rgba(0, 0, 0, 0.28);
+  color: #ffffff;
+  transition: background-color 150ms var(--apple-spring-fluid), box-shadow 150ms var(--apple-spring-fluid),
+    transform 150ms var(--apple-spring-fluid), filter 150ms ease-out;
+}
+.glass-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.glass-btn:active {
+  transform: scale(0.92);
+  filter: brightness(1.12);
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.mobile-topbar-floating {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  left: 12px;
+  z-index: 60;
+  pointer-events: none;
+}
+.mobile-floating-back {
+  pointer-events: auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.mobile-subview-bar {
+  display: flex;
+  align-items: center;
+  height: 54px;
+  padding: 0 16px;
+  padding-top: max(4px, env(safe-area-inset-top));
+  border-radius: 0;
+  flex-shrink: 0;
+  z-index: 50;
+}
+
+/* ---------- liquid glass off ----------
+   Flush docked chrome, no refraction: solid fills keep hierarchy without blur. */
+html.noglass .glass,
+html.noglass .glass-strong,
+html.noglass .glass-pill,
+html.noglass .glass-card,
+html.noglass .mobile-subview-bar,
+html.noglass .ob-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgb(var(--panel));
+  border-color: rgb(var(--hairline) / var(--hairline-alpha));
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18);
+}
+html.noglass .glass-btn {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(255, 255, 255, 0.14);
+}
+html.noglass .player-glass,
+html.noglass .chrome-glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgb(var(--base) / 0.96);
+}
+html.noglass .mobile-chrome-dock {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+html.noglass .mobile-chrome-dock > div {
+  width: 100%;
+  max-width: 100%;
+  padding-inline: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  gap: 0;
+  pointer-events: auto;
+}
+html.noglass .mobile-player {
+  background: #0f0f13;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+  height: 58px;
+  padding: 0 12px;
+}
+html.noglass .mobile-player::before,
+html.noglass .mobile-nav::before {
+  display: none;
+}
+html.noglass .mobile-nav {
+  background: #0b0b0e;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-radius: 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: none;
+  height: 54px;
+}
+html.noglass .mobile-topbar {
+  background: #0b0b0e;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border: none;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  box-shadow: none;
+}
+html.noglass .mobile-sheet {
+  background: rgb(var(--panel));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* No backdrop-filter at all (an engine without it): the material degrades to
+   a solid pane instead of turning into a see-through rectangle. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .glass-pill,
+  .glass-card,
+  .glass-strong,
+  .mobile-player,
+  .mobile-nav,
+  .mobile-sheet,
+  .mobile-subview-bar,
+  .mobile-search input {
+    background: rgb(var(--panel));
+  }
+}
+
+/* ============================================================
+   Global motion system — one animation language for the app.
+   Only transform + opacity keyframes (GPU-friendly, no layout
+   properties), with physical-feeling durations:
+     micro  ~120ms  icon morphs, state pops
+     small  ~180ms  metadata swaps, hovers
+     medium ~260ms  artwork swaps, panels
+   Easings: ease-out enters, ease-in exits, gentle snap for press.
+   Decorative loops (drift/mesh/eq/shimmer) live with the components
+   that own them. Anything added here is automatically honoured by
+   the reduce-motion rules at the bottom of this file.
+   ============================================================ */
+:root {
+  --motion-micro: 120ms;
+  --motion-small: 180ms;
+  --motion-medium: 260ms;
+  --motion-large: 420ms;
+  --ease-enter: cubic-bezier(0.2, 0.8, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 0.6, 1);
+  --ease-snap: cubic-bezier(0.34, 1.3, 0.5, 1);
+  /* Apple Music fluid motion & spring physics tokens */
+  --apple-spring-fluid: cubic-bezier(0.32, 0.72, 0, 1);
+  --apple-spring-bounce: cubic-bezier(0.175, 0.885, 0.32, 1.15);
+  --apple-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --apple-art-breathe: cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* ---------- reusable micro-interaction utilities ----------
+   NOTE: these set a *superset* transition-property (transform + shadow +
+   the color set Tailwind's transition-colors covers) instead of the
+   `transition` shorthand, so adding them never kills an existing color
+   hover — equal specificity, but nothing the element had is dropped. */
+
+/* Card lift: barely-there rise on hover. Pair with artwork zoom. */
+.card-lift {
+  transition-property: transform, box-shadow, background-color, border-color, color, fill, stroke, opacity;
+  transition-duration: var(--motion-small);
+  transition-timing-function: var(--ease-enter);
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* Keyed icon swap wrapper: remounts (via React key) on state change so the
+   incoming glyph pops instead of hard-cutting. Inline-grid keeps the box
+   identical so surrounding layout never shifts. */
+.icon-swap {
+  display: inline-grid;
+  place-items: center;
+}
+.icon-swap > * {
+  animation: icon-pop var(--motion-micro) var(--ease-enter);
+}
+@keyframes icon-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Mode state morph (shuffle + repeat): each button is one persistent svg
+   and its state overlays (shuffle slash, repeat "1" / slash) are always
+   mounted; toggling eases their dashoffset so states flow into each
+   other. Pair with pathLength={1} + strokeDasharray={1}. */
+.flow-dash {
+  transition: stroke-dashoffset 300ms var(--ease-enter);
+}
+
+/* ---------- keyframes ---------- */
+
+/* Artwork swaps: quick crossfade settling from a whisper of zoom. */
+@keyframes art-in {
+  from {
+    opacity: 0;
+    transform: scale(1.045);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.animate-art-in {
+  animation: art-in var(--motion-medium) var(--ease-enter);
+}
+
+/* Metadata swaps (title/artist): opacity-only so text never reflows. */
+@keyframes meta-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.animate-meta-in {
+  animation: meta-in var(--motion-small) var(--ease-enter);
+}
+
+/* Page content entrance: fade with a small rise. Fast enough to feel
+   instant, present enough to read as continuity between views. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-rise-in {
+  animation: rise-in var(--motion-small) var(--ease-enter);
+}
+
+/* ---------- onboarding stage ----------
+   One centered column: brand lockup, one-line message, then a single auth
+   card holding the active step. The atmosphere stays out of the way: a slow
+   light field, film grain, a vignette, and the app's now-playing equalizer
+   redrawn as a fine soundwave on the horizon. */
+
+/* Screen swap: one short direction-aware enter for the card's content, no
+   exits. The card content is keyed by the screen name so each swap replays. */
+@keyframes ob-fwd {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ob-back {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ob-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ob-screen {
+  animation: ob-fwd 0.2s var(--ease-enter) both;
+}
+.ob-screen.ob-back {
+  animation-name: ob-back;
+}
+/* Inline notes (errors) — a plain fade, no movement. */
+.ob-note {
+  animation: ob-fade 0.18s var(--ease-enter) both;
+}
+
+@keyframes ob-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.ob-item {
+  opacity: 0;
+  animation: ob-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--ob-delay, 0ms);
+}
+
+/* Page column — brand, message, card. margin:auto centers it in the scroll
+   host and collapses to plain flow (scrollable) on short windows. */
+.ob-page {
+  width: 100%;
+  max-width: 480px;
+  margin: auto;
+  padding: 24px 24px 108px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+/* Hero lockup — the product mark, page-scale. */
+.ob-lockup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+}
+.ob-lockup-logo {
+  height: 44px;
+  width: auto;
+}
+.ob-lockup-text {
+  height: 28.4px;
+  width: auto;
+}
+
+.ob-headline {
+  margin-top: 22px;
+  font-family: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: clamp(26px, 2.2vw, 30px);
+  line-height: 1.15;
+  color: rgb(var(--ink-hi));
+  text-wrap: balance;
+}
+.ob-tagline {
+  margin-top: 9px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgb(var(--ink-dim));
+  max-width: 44ch;
+}
+
+/* The auth card — the only surface on the page. The app's glass recipe,
+   dialed quiet: panel tint over the canvas, hairline, top highlight. */
+.ob-card {
+  width: 100%;
+  margin-top: 26px;
+  padding: 26px;
+  border-radius: 20px;
+  text-align: left;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(255, 255, 255, 0.12) 0%, transparent 70%),
+    rgb(var(--panel) / 0.62);
+  border: none;
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  box-shadow: 0 24px 64px -24px rgba(0, 0, 0, 0.8);
+}
+
+/* Focus: the shell drops focus rings app-wide; onboarding re-adds a visible
+   one for its buttons. Inputs are covered by their own focus treatment. */
+.ob-root .ob-btn:focus-visible {
+  outline: 2px solid rgb(var(--ink-hi) / 0.65);
+  outline-offset: 2px;
+}
+
+/* Atmosphere — one light field above the column, one answering glow low and
+   off to the side. Slow drifts, barely-there alpha. */
+@keyframes ob-drift-a {
+  0%, 100% { transform: none; }
+  50% { transform: translate3d(2.5%, 3%, 0) scale(1.05); }
+}
+@keyframes ob-drift-b {
+  0%, 100% { transform: none; }
+  50% { transform: translate3d(-3%, -3%, 0) scale(1.04); }
+}
+.ob-light {
+  position: absolute;
+  top: -240px;
+  left: calc(50% - 450px);
+  width: 900px;
+  height: 640px;
+  background: radial-gradient(ellipse at center, rgb(var(--primary) / 0.075), transparent 62%);
+  filter: blur(40px);
+  animation: ob-drift-a 38s ease-in-out infinite;
+  will-change: transform;
+}
+.ob-light-b {
+  top: auto;
+  left: auto;
+  bottom: -260px;
+  right: -220px;
+  width: 760px;
+  height: 560px;
+  background: radial-gradient(ellipse at center, rgb(var(--primary) / 0.05), transparent 62%);
+  animation: ob-drift-b 44s ease-in-out infinite;
+}
+
+/* Film grain for depth — pure texture, near-invisible. */
+.ob-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.032;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.ob-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 40%, transparent 52%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+/* Soundwave horizon — the app's now-playing bars, edge-faded so they read
+   as atmosphere rather than a control. */
+.ob-eq-strip {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(760px, 78vw);
+  height: 42px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+}
+.ob-eq-bar {
+  width: 2px;
+  border-radius: 1px;
+  background: rgb(var(--ink-hi) / 0.12);
+  height: 100%;
+  transform-origin: bottom;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ob-item,
+  .ob-screen,
+  .ob-note {
+    opacity: 1;
+    animation: none;
+  }
+  .ob-light {
+    animation: none;
+  }
+}
+
+/* ---------- fullscreen (NowPlaying) cinematic transition ----------
+   One continuous move, staged by delay — artwork/background first, then
+   transport, metadata chrome, secondary rows. Transform + opacity only;
+   `both` fill so delayed elements hold their hidden state until their
+   cue instead of flashing in early. */
+@keyframes fs-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fs-enter {
+  animation: fs-enter 280ms var(--ease-enter) both;
+}
+.fs-d1 { animation-delay: 40ms; }
+.fs-d2 { animation-delay: 90ms; }
+.fs-d3 { animation-delay: 140ms; }
+.fs-d4 { animation-delay: 190ms; }
+
+/* Exit: the room settles back — quick fade with a whisper of contraction.
+   Applied to the overlay root while the OS leaves fullscreen underneath. */
+@keyframes fs-exit {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.992);
+  }
+}
+.fs-exiting {
+  animation: fs-exit 210ms var(--ease-exit) forwards;
+}
+
+/* ---------- fullscreen cinematic mode ----------
+   The album-art-driven backdrop crossfade, the hero artwork's breathing
+   pulse and the ambient visualizer. Transform + opacity only; the
+   reduce-motion rules at the end of this file flatten all of it. */
+
+/* Whole-layer crossfade between tracks: the previous song's atmosphere stays
+   mounted underneath while the new one fades in — no flash, no dip. */
+@keyframes fs-bg-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fs-bg-in {
+  animation: fs-bg-in 1100ms ease-out both;
+}
+
+/* The hero artwork breathes while audio plays — a barely-there scale on a
+   slow loop, no bounce, no rotation. Pausing removes the animation; the
+   wrapper's transition settles the scale back smoothly. Lives on its own
+   wrapper so it never fights the fs-enter entrance for the transform. */
+@keyframes fs-art-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.014);
+  }
+}
+.fs-art-wrap {
+  transition: transform 420ms var(--apple-art-breathe, cubic-bezier(0.2, 0.9, 0.3, 1));
+  will-change: transform;
+}
+.fs-art-wrap.is-paused {
+  transform: scale(0.88);
+}
+.fs-art-wrap.is-playing {
+  transform: scale(1);
+}
+.fs-art-wrap.is-playing.fs-art-breathe {
+  animation: fs-art-breathe 5.2s ease-in-out infinite;
+}
+
+/* Ambient visualizer — a thin symmetric waveform. Bars dance on staggered
+   loops (per-bar duration + negative delay via --dur/--delay) only while
+   audio plays; removing .is-playing settles every bar to its resting height
+   (--rest) through the transition instead of freezing mid-flight. */
+@keyframes fs-viz-dance {
+  0%,
+  100% {
+    transform: scaleY(0.22);
+  }
+  16% {
+    transform: scaleY(0.52);
+  }
+  34% {
+    transform: scaleY(0.9);
+  }
+  52% {
+    transform: scaleY(0.36);
+  }
+  70% {
+    transform: scaleY(1);
+  }
+  86% {
+    transform: scaleY(0.44);
+  }
+}
+.fs-viz {
+  -webkit-mask-image: linear-gradient(to right, transparent, black 18%, black 82%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 18%, black 82%, transparent);
+}
+.fs-viz-bar {
+  width: 3px;
+  height: 100%;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.2);
+  transform: scaleY(var(--rest, 0.14));
+  transform-origin: center;
+  transition: transform 900ms var(--ease-enter), background-color 900ms ease;
+}
+.fs-viz.is-playing .fs-viz-bar {
+  background: rgb(255 255 255 / 0.32);
+  animation: fs-viz-dance var(--dur, 2.6s) ease-in-out var(--delay, 0s) infinite;
+}
+
+/* ---------- Apple Music style Liquid Aurora moving gradient mesh ---------- */
+@keyframes liquid-aurora-1 {
+  0% {
+    transform: translate3d(-10%, -10%, 0) rotate(0deg) scale(1);
+  }
+  33% {
+    transform: translate3d(8%, -4%, 0) rotate(120deg) scale(1.15);
+  }
+  66% {
+    transform: translate3d(-4%, 12%, 0) rotate(240deg) scale(0.95);
+  }
+  100% {
+    transform: translate3d(-10%, -10%, 0) rotate(360deg) scale(1);
+  }
+}
+
+@keyframes liquid-aurora-2 {
+  0% {
+    transform: translate3d(12%, 10%, 0) rotate(0deg) scale(1.1);
+  }
+  33% {
+    transform: translate3d(-8%, 6%, 0) rotate(-120deg) scale(0.92);
+  }
+  66% {
+    transform: translate3d(6%, -10%, 0) rotate(-240deg) scale(1.18);
+  }
+  100% {
+    transform: translate3d(12%, 10%, 0) rotate(-360deg) scale(1.1);
+  }
+}
+
+@keyframes liquid-aurora-wave {
+  0% {
+    transform: translate3d(-15%, -12%, 0) rotate(-12deg) scale(1.05);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translate3d(12%, 12%, 0) rotate(12deg) scale(1.22);
+    opacity: 0.55;
+  }
+  100% {
+    transform: translate3d(-15%, -12%, 0) rotate(-12deg) scale(1.05);
+    opacity: 0.35;
+  }
+}
+
+.liquid-aurora-blob-1 {
+  animation: liquid-aurora-1 22s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+  contain: strict;
+}
+
+.liquid-aurora-blob-2 {
+  animation: liquid-aurora-2 28s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+  contain: strict;
+}
+
+.liquid-aurora-wave {
+  animation: liquid-aurora-wave 18s ease-in-out infinite;
+  will-change: transform, opacity;
+  contain: strict;
+}
+
+.liquid-aurora-paused {
+  animation-play-state: paused !important;
+}
+
+/* ---------- reduced motion ----------
+   Mirrors the in-app "Reduce animation" kill-switch for the OS-level
+   preference, so users who request reduced motion system-wide get it
+   without having to find the in-app toggle. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- macOS typography ---------- */
+/* Windows keeps the Segoe stack from the Tailwind config; on macOS the SF
+   family leads. These rules run after Tailwind's utilities in the cascade
+   and out-specify them, so every font-sans / font-display element follows. */
+html.platform-mac .font-sans {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+}
+html.platform-mac .font-display {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+}
+html.platform-mac body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+}
+html.platform-mac .ob-headline {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+}
+/* ============================================================
+   Mobile shell (≤860px) — same app, one column
+   ============================================================
+   Width-driven, not platform-driven: a narrow desktop window gets this
+   arrangement too. Only the chrome changes; every view, token and type
+   scale below is the desktop's own. */
+
+@media (max-width: 860px) {
+  /* The app is a touch surface here: no text selection, no rubber-band
+     scrolling of the page itself (the view scroller owns the scroll). */
+  body {
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ---------- top bar ---------- */
+.mobile-topbar {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 40px 1fr 40px;
+  align-items: center;
+  height: calc(52px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 12px 0;
+  position: relative;
+  z-index: 40;
+}
+.mobile-search {
+  position: relative;
+  flex-shrink: 0;
+  /* Generous top clearance so search field never collides with front selfie camera or status bar */
+  padding: calc(max(env(safe-area-inset-top, 0px), 24px) + 14px) 16px 12px;
+}
+.mobile-search input {
+  width: 100%;
+  height: 40px;
+  padding: 0 36px;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.06);
+  color: rgb(var(--ink));
+  font-size: 14px;
+  outline: none;
+  transition: background 160ms var(--ease-enter), box-shadow 160ms var(--ease-enter);
+}
+.mobile-search input::placeholder {
+  color: rgb(var(--ink-ghost) / 0.4);
+}
+.mobile-search input:focus {
+  background: rgb(255 255 255 / 0.1);
+}
+.mobile-search-icon {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  color: rgb(var(--ink-dim));
+  pointer-events: none;
+}
+.mobile-search-clear {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  color: rgb(var(--ink-dim));
+}
+.mobile-topbar-back {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  color: rgb(var(--ink));
+}
+.mobile-topbar-back:active {
+  background: rgb(255 255 255 / 0.08);
+}
+.mobile-topbar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mobile-topbar-avatar {
+  justify-self: end;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: rgb(var(--on-primary));
+  background: rgb(var(--primary));
+}
+.mobile-topbar-avatar.is-active {
+  box-shadow: 0 0 0 2px rgb(var(--primary) / 0.35);
+}
+
+/* ---------- mobile chrome dock (base fallback) ---------- */
+.mobile-chrome-dock {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.mobile-chrome-dock > div {
+  width: 100%;
+  max-width: 480px;
+  padding-inline: 14px;
+  padding-bottom: max(10px, env(safe-area-inset-bottom, 10px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+/* ---------- player bar ---------- */
+.mobile-player {
+  flex-shrink: 0;
+  position: relative;
+  width: 100%;
+  height: 58px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border-radius: 20px;
+  padding: 0 12px 0 10px;
+  user-select: none;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 180ms cubic-bezier(0.32, 0.72, 0, 1), box-shadow 180ms ease-out;
+}
+.mobile-player:active {
+  transform: scale(0.985);
+}
+.mobile-player-progress {
+  position: absolute;
+  inset: auto 12px 0 12px;
+  height: 2.5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  z-index: 2;
+}
+.mobile-player-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(var(--primary)), #ff5e8a);
+  box-shadow: 0 0 8px rgb(var(--primary) / 0.7);
+  transition: width 240ms linear;
+}
+.mobile-player-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+.mobile-player-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.mobile-player-art {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #202025;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.mobile-player-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.mobile-player-title {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-player-artist {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 450;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: -0.1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 1px;
+}
+.mobile-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #ffffff;
+}
+.mobile-player-controls > button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.85);
+  transition: transform 140ms cubic-bezier(0.32, 0.72, 0, 1), opacity 140ms ease;
+}
+.mobile-player-controls > button:active:not(:disabled) {
+  transform: scale(0.88);
+}
+.mobile-player-play {
+  width: 38px !important;
+  height: 38px !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.20) !important;
+  color: #ffffff !important;
+  border: none !important;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35) !important;
+}
+.mobile-player-spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  animation: mobile-spin 700ms linear infinite;
+}
+@keyframes mobile-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- bottom navigation ---------- */
+.mobile-nav {
+  position: relative;
+  width: 100%;
+  height: 56px;
+  border-radius: 28px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: center;
+  padding: 0 4px;
+  user-select: none;
+  overflow: hidden;
+}
+.mobile-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 100%;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: -0.1px;
+  color: rgba(255, 255, 255, 0.55);
+  transition: color 150ms ease, transform 150ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.mobile-tab.is-active {
+  color: #ffffff;
+  font-weight: 600;
+}
+.mobile-tab:active {
+  background: rgb(255 255 255 / 0.05);
+}
+
+/* ---------- bottom sheet (queue / details / actions) ---------- */
+.mobile-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 105;
+  display: flex;
+  align-items: flex-end;
+  background: rgb(0 0 0 / 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  animation: mobile-fade-in 240ms ease-out;
+}
+.mobile-sheet {
+  width: 100%;
+  max-height: 86vh;
+  overflow: hidden auto;
+  border-radius: 24px 24px 0 0;
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: mobile-sheet-up 340ms var(--apple-spring-fluid, cubic-bezier(0.32, 0.72, 0, 1));
+  will-change: transform;
+}
+/* Dismissal mirrors the entrance instead of snapping the sheet away. The
+   component holds itself mounted for the length of these two animations. */
+.mobile-sheet-backdrop.is-closing {
+  animation: mobile-fade-out 200ms ease-in forwards;
+}
+.mobile-sheet.is-closing {
+  animation: mobile-sheet-down 220ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@keyframes mobile-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes mobile-sheet-down {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes mobile-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes mobile-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* ---------- Apple Music fluid touch motion ----------
+   A phone has no hover, so every affordance the desktop draws on hover has to
+   land on press instead: taps fire immediately (touch-action), rows sink a
+   hair under the finger, tab icons compress with elastic rebound. */
+@media (hover: none) {
+  button,
+  [role="button"],
+  a {
+    touch-action: manipulation;
+  }
+  #view-scroll button,
+  #view-scroll a,
+  .mobile-player-meta {
+    transition-property: transform, background-color, color, opacity;
+    transition-duration: var(--motion-micro);
+    transition-timing-function: var(--apple-ease-out, cubic-bezier(0.16, 1, 0.3, 1));
+  }
+  #view-scroll button:active,
+  #view-scroll a:active,
+  .mobile-player-meta:active {
+    transform: scale(0.975);
+    transition-duration: 80ms;
+  }
+  .mobile-tab svg {
+    transition: transform var(--motion-small) var(--apple-spring-bounce, cubic-bezier(0.175, 0.885, 0.32, 1.15));
+  }
+  .mobile-tab:active svg {
+    transform: scale(0.84);
+  }
+  .mobile-player-controls > button {
+    transition: transform var(--motion-micro) var(--apple-spring-bounce, cubic-bezier(0.175, 0.885, 0.32, 1.15)), opacity var(--motion-micro) linear;
+  }
+  .mobile-player-controls > button:active:not(:disabled) {
+    transform: scale(0.88);
+  }
+  .mobile-player-play:active {
+    transform: scale(0.84);
+  }
+}
+
+@media (max-width: 860px) {
+  /* Remove dark top tint wash and dark sticky topbar on mobile for clean edge-to-edge Apple Music aesthetic */
+  .home-tint {
+    display: none !important;
+  }
+  .mobile-topbar {
+    display: none !important;
+  }
+  /* Desktop scroll chrome has no place on a phone — and the reserved 14px
+     gutter was narrowing every row by that much. */
+  .scroll-host {
+    scrollbar-width: none;
+    scrollbar-gutter: auto;
+  }
+  .scroll-host::-webkit-scrollbar {
+    display: none;
+    width: 0;
+  }
+}
+
+@keyframes heart-pop {
+  0% { transform: scale(1); }
+  25% { transform: scale(0.78); }
+  50% { transform: scale(1.36); }
+  75% { transform: scale(0.92); }
+  100% { transform: scale(1); }
+}
+
+.animate-heart-pop {
+  animation: heart-pop 340ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
