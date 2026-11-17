@@ -167,11 +167,11 @@ export function MobilePlayerBar() {
       <div className="mobile-player-row">
         <div className="mobile-player-meta">
           {track.thumb ? (
-            <span key={track.id} className="mobile-player-art art-hairline animate-art-in">
+            <span key={`art-${track.id}`} className="mobile-player-art art-hairline animate-art-in">
               <img src={upgradeArtwork(track.thumb, 128)} alt="" />
             </span>
           ) : null}
-          <span key={track.id} className="min-w-0 text-left animate-meta-in">
+          <span key={`meta-${track.id}`} className="min-w-0 text-left animate-meta-in">
             <span className="mobile-player-title">{track.title}</span>
             <span className="mobile-player-artist">{track.artist}</span>
           </span>

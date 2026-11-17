@@ -75,6 +75,7 @@ files return `null`, canvas returns `null`, no cloud sync, no backup import/expo
 | A-312 | "Don't repeat suggestions", "Reduce motion", appearance/theme rows — confirm each behaves on Android or hide it. | Each Settings row is exercised once; row either changes behaviour or is hidden. |
 | A-313 | Sort a playlist's tracks (local and remote): Title, Artist, Album, Duration, plus "Custom order" to restore the stored arrangement; tapping the active key reverses it. | Open a playlist → "⋯" → Sort → Title → rows reorder alphabetically; open a remote playlist → Sort → Duration → 49 rows arrive in ascending length order; Custom order restores the original order. |
 | A-314 | One shared Liquid Glass material for every pane (tint · refraction · masked fresnel rim · light), Apple-style press illumination and tab lens, sheet exit animation, player artwork/meta swap, and removal of the desktop scroll gutter on the phone. | Computed `backdrop-filter`/`background` on `.mobile-player` at 412dp matches the recipe; the pill and nav are inset 14dp with `scrollWidth === innerWidth === 412`; a sheet mounts, gets `.is-closing` and unmounts after the exit animation. |
+| A-315 | Player bar kept every previous cover: both siblings in `.mobile-player-meta` used `key={track.id}`, so React saw duplicate sibling keys and appended a new art node per track instead of replacing it. | Play four tracks in a row → `document.querySelectorAll(".mobile-player-art").length === 1` after each, and the row shows one cover with the title back at full width. |
 
 ---
 
