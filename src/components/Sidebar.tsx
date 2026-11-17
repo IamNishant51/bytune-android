@@ -707,8 +707,10 @@ function LibraryPill() {
                 {r.kind === "artist" ? (
                   r.thumb ? (
                     <img
-                      src={upgradeArtwork(r.thumb)}
+                      src={upgradeArtwork(r.thumb, 160)}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       className="w-12 h-12 rounded-full object-cover art-hairline shrink-0"
                     />
                   ) : (
@@ -725,7 +727,7 @@ function LibraryPill() {
                     <FolderOpen className="w-5 h-5 text-ink-hi/55" />
                   </span>
                 ) : r.thumb ? (
-                  <img src={upgradeArtwork(r.thumb)} alt="" className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
+                  <img src={upgradeArtwork(r.thumb, 160)} alt="" loading="lazy" decoding="async" className="w-12 h-12 rounded-md object-cover art-hairline shrink-0" />
                 ) : (
                   <div className="w-12 h-12 rounded-md bg-ink-hi/[0.06] art-hairline shrink-0 grid place-items-center">
                     {r.kind === "downloads" ? (

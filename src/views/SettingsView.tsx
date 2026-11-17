@@ -37,6 +37,7 @@ import {
 } from "../stores/settings";
 import { useSession } from "../lib/session";
 import { isMobileApp } from "../lib/platform";
+import { isLowMemoryDevice } from "../lib/device";
 import { setOnboardingIntent } from "../lib/onboardingIntent";
 import { GuestDeleteModal } from "../components/AccountModals";
 import { useUI, type MenuItem } from "../stores/ui";
@@ -362,10 +363,11 @@ function OutputDeviceGroup() {
 
 /**
  * ByTune account — the cloud layer above the YouTube cookie. Guests keep
- * everything local; signed-in users get automatic cloud backup of library,
- * playlists, history and settings. Backups always run on top of the local
- * copy: restoring never deletes anything without writing a local backup
- * first (userData/data/backups).
+ * everything local; on desktop, signed-in users get automatic cloud backup
+ * of library, playlists, history and settings (the Android bridge has no
+ * cloud sync yet — library data stays on the device). Backups always run
+ * on top of the local copy: restoring never deletes anything without
+ * writing a local backup first (userData/data/backups).
  */
 function CloudAccountGroup() {
   const toast = useUI((st) => st.toast);
@@ -420,7 +422,9 @@ function CloudAccountGroup() {
   const signOutWithConfirm = (): void => {
     openDialog({
       title: "Sign out of ByTune?",
-      body: "Your account data is safely backed up to the cloud. You can sign in again any time to restore it.",
+      body: isMobileApp
+        ? "You'll be signed out of your account. Your library stays on this device."
+        : "Your account data is safely backed up to the cloud. You can sign in again any time to restore it.",
       confirmLabel: "Sign out",
       cancelLabel: "Cancel",
       onConfirm: () => void run(async () => { await window.bytune?.authSignOut(); }, "Signed out"),
@@ -445,29 +449,41 @@ function CloudAccountGroup() {
   };
 
   const signedIn = session.mode === "account";
+  // On Android there is no cloud sync (the bridge's sync methods are
+  // no-ops) — the status line must not claim automatic backup.
   const subtitle = !session.loaded
     ? "…"
-    : signedIn
-      ? status?.state === "syncing"
-        ? "Syncing…"
-        : status?.state === "error"
-          ? `Sync error, will retry${status.lastError ? "" : ""}`
-          : status?.state === "pending"
-            ? "Pending changes"
-            : status?.lastSyncAt
-              ? `Synced ${new Date(status.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
-              : "Signed in, backing up automatically"
-      : session.mode === "guest"
-        ? "Your data is stored only on this device"
-        : "Not signed in";
+    : isMobileApp
+      ? signedIn
+        ? "Signed in with Google — your library stays on this device"
+        : session.mode === "guest"
+          ? "Your data is stored only on this device"
+          : "Not signed in"
+      : signedIn
+        ? status?.state === "syncing"
+          ? "Syncing…"
+          : status?.state === "error"
+            ? `Sync error, will retry${status.lastError ? "" : ""}`
+            : status?.state === "pending"
+              ? "Pending changes"
+              : status?.lastSyncAt
+                ? `Synced ${new Date(status.lastSyncAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                : "Signed in, backing up automatically"
+        : session.mode === "guest"
+          ? "Your data is stored only on this device"
+          : "Not signed in";
 
   return (
     <SettingsGroup
       header="ByTune account"
       footer={
-        signedIn
-          ? "Backup runs automatically. Changes upload within seconds. Restore replaces this device's copy with the cloud version (a local backup is kept first)."
-          : "Create an account to keep your library safe even if this PC's app data is wiped."
+        isMobileApp
+          ? signedIn
+            ? "Cloud backup isn't available on Android yet — your library, playlists and history stay on this device."
+            : "Sign in with Google to keep your username across devices. Your library stays on this device."
+          : signedIn
+            ? "Backup runs automatically. Changes upload within seconds. Restore replaces this device's copy with the cloud version (a local backup is kept first)."
+            : "Create an account to keep your library safe even if this PC's app data is wiped."
       }
     >
       <SettingsRow
@@ -492,20 +508,27 @@ function CloudAccountGroup() {
       <div className="px-4 pb-3 flex flex-wrap gap-2">
         {signedIn ? (
           <>
-            <button
-              onClick={() => void run(async () => { await window.bytune?.syncBackupNow(); }, "Backup complete")}
-              disabled={busy}
-              className="h-9 px-3.5 rounded-lg bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[13px] font-semibold text-ink-hi transition-colors disabled:opacity-40 inline-flex items-center gap-1.5"
-            >
-              <CloudUpload className="w-4 h-4" /> Back up now
-            </button>
-            <button
-              onClick={() => void run(async () => { await window.bytune?.syncRestoreNow(); }, "Restored from cloud")}
-              disabled={busy}
-              className="h-9 px-3.5 rounded-lg bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[13px] font-semibold text-ink-hi transition-colors disabled:opacity-40 inline-flex items-center gap-1.5"
-            >
-              <CloudDownload className="w-4 h-4" /> Restore from cloud
-            </button>
+            {/* Back up / restore are desktop-only: the Android bridge's sync
+                methods return fake success, so the buttons stay hidden here
+                rather than promising a backup that never happens. */}
+            {!isMobileApp && (
+              <>
+                <button
+                  onClick={() => void run(async () => { await window.bytune?.syncBackupNow(); }, "Backup complete")}
+                  disabled={busy}
+                  className="h-9 px-3.5 rounded-lg bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[13px] font-semibold text-ink-hi transition-colors disabled:opacity-40 inline-flex items-center gap-1.5"
+                >
+                  <CloudUpload className="w-4 h-4" /> Back up now
+                </button>
+                <button
+                  onClick={() => void run(async () => { await window.bytune?.syncRestoreNow(); }, "Restored from cloud")}
+                  disabled={busy}
+                  className="h-9 px-3.5 rounded-lg bg-ink-hi/[0.08] hover:bg-ink-hi/[0.14] text-[13px] font-semibold text-ink-hi transition-colors disabled:opacity-40 inline-flex items-center gap-1.5"
+                >
+                  <CloudDownload className="w-4 h-4" /> Restore from cloud
+                </button>
+              </>
+            )}
             <button
               onClick={signOutWithConfirm}
               disabled={busy}
@@ -547,6 +570,16 @@ export function SettingsView() {
   const session = useSession();
   const [guestDeleteOpen, setGuestDeleteOpen] = useState(false);
   const [folderSummary, setFolderSummary] = useState<string | null>(null);
+  const lowMemoryDevice = isLowMemoryDevice();
+
+  // Low-RAM gate: Automix tempo analysis and silence detection decode whole
+  // tracks (~10x the file size in memory). On a low-memory phone they stay
+  // off — including a value persisted elsewhere — and the rows say why.
+  useEffect(() => {
+    if (!lowMemoryDevice) return;
+    if (s.smartFade) s.setSmartFade(false);
+    if (s.skipSilence) s.setSkipSilence(false);
+  }, [lowMemoryDevice, s]);
 
   const refreshFolderSummary = async (): Promise<void> => {
     const lib = await window.bytune?.localLibrary();
@@ -701,14 +734,14 @@ export function SettingsView() {
         <SettingsRow
           icon={Wifi}
           title="Streaming quality"
-          subtitle="Ceiling for streamed audio"
+          subtitle="Low ≤ 64 kbps · Medium ≤ 128 kbps · High uncapped"
           value={STREAM_QUALITY_LABEL[s.streamingQuality]}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) =>
             toggleDropdownAt(
               e,
               qualityMenu(
-                ["low", "medium", "high", "lossless"],
+                ["low", "medium", "high"],
                 STREAM_QUALITY_LABEL,
                 s.streamingQuality,
                 s.setStreamingQuality
@@ -780,16 +813,28 @@ export function SettingsView() {
         <SettingsRow
           icon={Sparkles}
           title="Automix"
-          subtitle={s.smartFade ? "Enabled: transitions decided per track pair" : "Disabled: uses the crossfade above"}
-          trailing={<Switch checked={s.smartFade} onChange={s.setSmartFade} />}
+          subtitle={
+            lowMemoryDevice
+              ? "Unavailable on this device — full-track analysis uses too much memory"
+              : s.smartFade
+                ? "Enabled: transitions decided per track pair"
+                : "Disabled: uses the crossfade above"
+          }
+          disabled={lowMemoryDevice}
+          trailing={<Switch checked={s.smartFade} onChange={s.setSmartFade} disabled={lowMemoryDevice} />}
           onClick={() => s.setSmartFade(!s.smartFade)}
         />
         <Divider />
         <SettingsRow
           icon={VolumeX}
           title="Skip silence"
-          subtitle="Jump over silent intros and gaps"
-          trailing={<Switch checked={s.skipSilence} onChange={s.setSkipSilence} />}
+          subtitle={
+            lowMemoryDevice
+              ? "Unavailable on this device — full-track analysis uses too much memory"
+              : "Jump over silent intros and gaps"
+          }
+          disabled={lowMemoryDevice}
+          trailing={<Switch checked={s.skipSilence} onChange={s.setSkipSilence} disabled={lowMemoryDevice} />}
           onClick={() => s.setSkipSilence(!s.skipSilence)}
         />
         <Divider />
@@ -991,7 +1036,9 @@ export function SettingsView() {
             }
             openDialog({
               title: "Reset local data?",
-              body: "Your local ByTune data will be removed from this device. Your account and cloud backup won't be deleted. Sign in again and everything restores. Downloaded audio files are not touched.",
+              body: isMobileApp
+                ? "Your local ByTune data will be removed from this device. Cloud backup isn't available on Android yet, so your library, playlists and history cannot be restored after this. Downloaded audio files are not touched."
+                : "Your local ByTune data will be removed from this device. Your account and cloud backup won't be deleted. Sign in again and everything restores. Downloaded audio files are not touched.",
               confirmLabel: "Reset local data",
               danger: true,
               onConfirm: () => void resetAppData(),
@@ -1034,7 +1081,7 @@ export function SettingsView() {
 
 
       <div className="text-center text-[11px] text-ink-dim/80 pt-6 px-5 leading-relaxed">
-        ByTune {versions?.app ?? "1.0.0"} · GPL-3.0
+        ByTune {versions?.app ?? "1.1.0"} · GPL-3.0
       </div>
     </div>
   );

@@ -86,6 +86,10 @@ not viable in a WebView bundle.
 **Would reverse if** Google offers a supported token path, or the hidden-WebView approach is
 blocked.
 
+**Evolution (2026-11-17, 1.1.0, code-only).** Minting serializes (reject-while-busy), the
+previous WebView is destroyed in `start()`, the timeout is 15 s (was 60 s), JS adopts late
+tokens and can cancel via `cancelPoToken`. The decision stands; the implementation hardened.
+
 ---
 
 ## D4 — Loopback HTTP proxy in Kotlin for playback
@@ -108,6 +112,10 @@ desktop proxy: `/s/<key>?v=1` relays with the correct headers, forwards `Range` 
 - The loudness value rides the audio URL, so no second channel is needed.
 
 **Would reverse if** WebView media could set its own UA per request. It cannot.
+
+**Evolution (2026-11-17, 1.1.0, code-only).** 4-thread pool, 8-entry access-ordered LRU,
+non-2xx responses no longer send a `Content-Length`. Range relay and `Connection: close`
+untouched.
 
 ---
 
@@ -133,6 +141,10 @@ state, and the Zustand `persist` names for the stores.
 **Would reverse when** downloads or local files land (A-301/A-302): those need real storage,
 and the storage layer becomes a Capacitor plugin or Kotlin.
 
+**Note (2026-11-17).** The "would reverse when" fired for downloads: they use IndexedDB (see
+D19), not `localStorage` and not a Capacitor plugin. D5 still governs the JSON blobs. The
+"deferred" sentence in Consequences is stale — downloads shipped.
+
 ---
 
 ## D6 — Portrait lock for v1
@@ -157,7 +169,7 @@ refactor (A-401 → A-403) makes medium-width layouts real.
 
 ## D7 — Guest-only on Android for v1
 
-**Status:** ACCEPTED — revisit in A-310
+**Status:** SUPERSEDED by D18 (2026-11-17) — Google sign-in shipped; sync still absent
 
 **Context.** Accounts use Supabase (`supabase/`, `electron/sync-merge.ts`). Porting sign-in,
 token refresh, sync merge and conflict resolution is a project of its own, and the desktop
@@ -174,6 +186,10 @@ group in Settings is hidden.
 - The account group must stay hidden — a visible "Sign in" that does nothing is a defect.
 
 **Would reverse when** the owner wants cross-device sync (A-310).
+
+**Superseded by** D18: sign-in shipped via Supabase PKCE + deep link; the "account group must
+stay hidden" consequence is reversed for sign-in only — sync/backup UI stays hidden because
+sync is fake (see `STATUS.md` BROKEN table).
 
 ---
 
@@ -200,7 +216,7 @@ recorded in `FEATURES.md`. No visible control that silently does nothing.
 
 ## D9 — LRCLIB only for lyrics on Android
 
-**Status:** ACCEPTED — revisit in A-304
+**Status:** SUPERSEDED by D20 (2026-11-17) — the multi-provider engine was ported
 
 **Context.** `electron/lyrics.ts` is 2139 lines and multiple providers, including word-level
 timing. Porting all of it is a large amount of network-specific code.
@@ -214,6 +230,9 @@ same `parseLrc`.
 - The `SyncedLyrics` component is shared, so a provider added later needs no UI work.
 
 **Would reverse when** A-304 audits which providers actually matter.
+
+**Superseded by** D20: the full engine was ported rather than audited-down, lazy-loaded so
+the bundle cost is paid only when lyrics open.
 
 ---
 
@@ -238,6 +257,10 @@ same `parseLrc`.
 **Would reverse if** device testing shows decode-based analysis is too slow or memory-hungry.
 The fallback is to disable skip-silence/automix on low-RAM devices rather than change the
 engine.
+
+**Enforced (2026-11-17).** The Sound Enhancer EQ UI was removed: it had no graph wiring
+(no `BiquadFilter`/`MediaElementSource` in the tree) and D10 forbids adding a graph without
+reversing this ADR. Dead `eqPreset`/`eqBands` state remains in `src/stores/settings.ts`.
 
 ---
 
@@ -410,6 +433,133 @@ no logo — an adaptive icon does not draw reliably inside a `layer-list`) and, 
 
 **Would reverse if** a branded launch screen is wanted — then use an SVG/PNG logo in the
 layer-list, not the adaptive icon.
+
+---
+
+## D18 — Accounts: Google sign-in real, cloud sync absent (split from D7)
+
+**Status:** ACCEPTED (2026-11-17)
+
+**Context.** D7 made Android guest-only. Sign-in has since shipped (`src/mobile/auth.ts`,
+Supabase PKCE OAuth + `bytune://oauth/callback` deep link), but no sync merge exists:
+`syncNow`/`syncBackupNow`/`syncRestoreNow` return fake `{ok: true}` and write nothing.
+
+**Decision.** Keep the split honestly: sign-in stays visible (Onboarding + Settings account
+card); sync/backup/restore UI stays hidden on Android; `syncStatus` reports
+`available: false`. The fake-success methods are recorded as a defect in `STATUS.md`
+until A-310 decides real sync vs honest rejection.
+
+**Consequences.**
+- A signed-in user gets an identity and a username, but no cross-device data.
+- No caller may treat a sync `{ok: true}` as proof anything synced.
+- The README "guest-only" claim is dead; the account group is no longer hidden wholesale.
+
+**Would reverse if** A-310 implements real sync — then the methods do work and the UI unhides
+in the same change (D8).
+
+---
+
+## D19 — Chunked resumable downloads in app-private IndexedDB
+
+**Status:** ACCEPTED (2026-11-17, code-only, unverified on device)
+
+**Context.** The pre-1.1.0 download path was one 60 s `CapacitorHttp` request with base64
+conversion (3–4× memory), fake 1%→100% progress, no resume, no retry, and unbounded
+playlist concurrency. A-301's storage-scope question (app-private vs SAF folder) was never
+answered by the owner; the implementation had to pick one.
+
+**Decision.** App-private IndexedDB (`bytune-offline-audio`, v3, blob-free `meta`/`artwork`/
+`partials`/`chunks` stores). Downloads are sequential 1 MiB `Range` requests via `fetch`
+through the loopback proxy, with per-chunk retry, one 403 re-resolve per chunk, resume
+validation (byte count, MIME, total, ETag), a FIFO queue (2 concurrent, 1 on low-memory),
+a storage cap (1 GiB or 80% of estimate) with LRU eviction sparing liked tracks, and real
+byte progress. This resolves A-301's storage decision by implementation; a SAF folder
+remains a future option, not a promise.
+
+**Consequences.**
+- Downloads survive app restarts and resume after interruption; they do not survive
+  uninstall (app-private storage).
+- No new dependency. No native code — the proxy already existed.
+- Boot reconcile is metadata-only (`listOfflineMeta`); the old blob-loading reconcile is
+  deleted.
+- Migration v2→v3 runs in the upgrade handler with cursor backfill; a failed migration
+  must not strand existing downloads — verify on a 1.0.3 install with downloads (A-606).
+
+**Would reverse if** the owner wants downloads to survive uninstall (SAF folder), or device
+testing shows IndexedDB slower than a native file path on the 4 GB phone.
+
+---
+
+## D20 — Port the desktop multi-provider lyrics engine, lazy-loaded
+
+**Status:** ACCEPTED (2026-11-17, code-only, unverified on device)
+
+**Context.** D9 kept Android on LRCLIB-only because the desktop engine (`electron/lyrics.ts`,
+2139 lines, 14 providers, word-level sync) looked too large to port. The port turned out to
+be mechanical: the engine is pure TypeScript with no Node dependency.
+
+**Decision.** Port it as `src/lib/lyricsEngine.ts`, loaded only when lyrics open
+(`import()`), so the jsdom-bearing `api` chunk stays out of the first-paint path. LRCLIB
+remains one provider in the chain and the verified fallback.
+
+**Consequences.**
+- Word-level/karaoke sync becomes possible on the phone (unverified).
+- The bundle keeps jsdom — 5.5 MB, lazy-only. Do not claim it was removed.
+- A-304's acceptance check (5 tracks side by side with desktop) now settles the port
+  instead of an audit.
+
+**Would reverse if** the engine proves too heavy on the 4 GB phone in A-304 testing — then
+fall back to LRCLIB-only and keep the port out of the bundle.
+
+---
+
+## D21 — Code-split the renderer; no new dependency
+
+**Status:** ACCEPTED (2026-11-17)
+
+**Context.** The pre-1.1.0 bundle put everything in the first-paint path: one 889 kB index
+chunk plus a 5.5 MB `api` chunk (jsdom). Cold start on a 4 GB phone pays for all of it.
+
+**Decision.** Lazy-load views, the desktop shell, PipApp, the lyrics engine and auth via
+`import()`; `manualChunks` for react/zustand/lucide/Capacitor; `chunkSizeWarningLimit` 500.
+No new dependency was added anywhere in the 1.1.0 rebuild, so no dependency ADR was
+required (AGENTS.md rule 4).
+
+**Consequences.**
+- First-paint chunks: `index` ~292 kB, `vendor-react` ~134 kB, CSS ~112 kB (measured
+  2026-11-17, `npm run build` `✓ built in 30.29s`).
+- The >500 kB warning still fires for the lazy `api` chunk. That is expected, not a
+  regression — but it is not "fixed" either.
+- Lazy boundaries must not break the `bootstrap.ts` import order (`ARCHITECTURE.md` §2).
+
+**Would reverse if** lazy loading causes visible navigation stalls on device — then
+pre-warm the next view instead of reverting to one bundle.
+
+---
+
+## D22 — Signed release APKs via GitHub Actions secrets, never a committed keystore
+
+**Status:** ACCEPTED (2026-11-17, workflow never executed)
+
+**Context.** The release keystore is local-only (AGENTS.md rule 5) and no signed APK can be
+built from an environment without it. The 1.1.0 rebuild was implemented in an environment
+with no JDK/SDK at all, so the release path had to exist without a local build.
+
+**Decision.** `.github/workflows/android-release.yml`: tag `v*` + manual dispatch, JDK 17,
+Node 24, `npm ci`, build, `cap sync`, keystore from `secrets.KEYSTORE_BASE64` +
+`keystore.properties` from `KEYSTORE_PASSWORD`/`KEY_ALIAS`/`KEY_PASSWORD`, fail-fast
+missing-secret check, APK artifact, draft release on tag pushes only. Exact setup in
+`docs/android/CI-RELEASE.md`. First run is manual dispatch (artifact only) before tagging.
+
+**Consequences.**
+- A signed APK is producible without the owner's machine — once the four secrets exist.
+- The keystore still lives outside the repo; the base64 secret is the only copy in GitHub.
+  Losing the original keystore still orphans every install (BUILD.md §4.1).
+- A release is created as DRAFT until a verified installable APK exists. Never publish a
+  release claiming an APK that was not built and verified.
+
+**Would reverse if** the owner prefers local-only signing — then the workflow is deleted
+and `npm run apk` is the only path.
 
 ---
 

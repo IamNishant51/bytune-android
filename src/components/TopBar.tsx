@@ -401,20 +401,30 @@ export function TopBar() {
                   Search “{query.trim()}”
                 </span>
               </button>
-              {suggests.map((s, i) => (
-                <button
-                  key={`${s.text}-${i}`}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => submitSearch(s.text)}
-                  className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
-                    activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
-                  }`}
-                >
-                  <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
-                  <span className="min-w-0 flex-1 text-[14px] text-ink-hi truncate">{s.text}</span>
-                  <CornerDownLeft className="w-4 h-4 text-ink-hi/35 shrink-0" />
-                </button>
-              ))}
+              {(() => {
+                // Duplicate suggestion texts happen; occurrence numbers per
+                // text keep keys stable without a raw index suffix.
+                const occurrence = new Map<string, number>();
+                return suggests.map((s, i) => {
+                  const n = occurrence.get(s.text) ?? 0;
+                  occurrence.set(s.text, n + 1);
+                  const key = n === 0 ? s.text : `${s.text}#${n}`;
+                  return (
+                    <button
+                      key={key}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => submitSearch(s.text)}
+                      className={`w-full flex items-center gap-3 px-2.5 h-11 rounded-lg text-left transition-colors ${
+                        activeIdx === i + 1 ? "bg-ink-hi/[0.08]" : "hover:bg-ink-hi/[0.06]"
+                      }`}
+                    >
+                      <Search className="w-4 h-4 text-ink-hi/55 shrink-0" />
+                      <span className="min-w-0 flex-1 text-[14px] text-ink-hi truncate">{s.text}</span>
+                      <CornerDownLeft className="w-4 h-4 text-ink-hi/35 shrink-0" />
+                    </button>
+                  );
+                });
+              })()}
             </div>
           )}
           {/* Recent searches — BitChord mobile's model: an empty focused field
@@ -441,20 +451,16 @@ export function TopBar() {
               {recents.map((q) => (
                 <div
                   key={q}
-                  /* Whole row is the click target: the inner button only spans
-                     its content height, so the rest of the highlighted row
-                     showed the arrow cursor and ate clicks. */
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => submitSearch(q)}
-                  className="group w-full flex cursor-pointer items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
+                  /* The inner button spans the full row height, so the whole
+                     highlighted row is one click target — no click handler
+                     on the outer div, which would double-fire with the
+                     button's. */
+                  className="group w-full flex items-center gap-3 pl-2.5 pr-1.5 h-11 rounded-lg hover:bg-ink-hi/[0.06] transition-colors"
                 >
                   <button
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      submitSearch(q);
-                    }}
-                    className="min-w-0 flex-1 flex items-center gap-3 text-left cursor-pointer"
+                    onClick={() => submitSearch(q)}
+                    className="min-w-0 flex-1 h-full flex items-center gap-3 text-left cursor-pointer"
                   >
                     <History className="w-4 h-4 text-ink-hi/55 shrink-0" />
                     <span className="text-[14px] text-ink-hi truncate">{q}</span>

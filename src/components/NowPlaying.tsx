@@ -21,19 +21,24 @@
  * used, kept verbatim so the window behavior (Esc, rapid toggles, reduced
  * motion) is untouched.
  */
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { ChevronDown, Heart, Music2, Loader2, Download, Check, MoreVertical, Timer, Sparkles, Volume1, Volume2 } from "lucide-react";
-import { PlayerBar } from "./PlayerBar";
-import { QueuePanel } from "./RightRail";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ChevronDown, Heart, Music2, Loader2, Download, Check, MoreVertical, Timer } from "lucide-react";
+// The desktop shell pieces are lazy: the phone never renders them, and the
+// static imports used to pull Sidebar/RightRail/PlayerBar into the first
+// paint bundle (see App.tsx — same chunks, shared by both import sites).
+const PlayerBar = lazy(() => import("./PlayerBar").then((m) => ({ default: m.PlayerBar })));
+const QueuePanel = lazy(() => import("./RightRail").then((m) => ({ default: m.QueuePanel })));
 import { LyricsView } from "./SyncedLyrics";
 import { requestLyrics } from "./LyricsCenter";
 import { usePlayer } from "../stores/player";
 import { useLibrary } from "../stores/library";
-import { useSettings, EQ_PRESETS } from "../stores/settings";
+import { useSettings } from "../stores/settings";
 import { useUI } from "../stores/ui";
 import { useSleepTimer } from "../stores/sleepTimer";
 import { useArtworkPalette, type ArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
+import { isLowMemoryDevice } from "../lib/device";
+import { haptic } from "../lib/haptics";
 import { useDrag } from "../lib/dnd";
 import { useCanvas } from "../lib/canvas";
 import { requestLyricsAlignment, useLyricsAlign } from "../lib/lyricsOffset";
@@ -80,6 +85,10 @@ function FsBackdropLayer({
   playing?: boolean;
 }) {
   const palette = useArtworkPalette(artwork);
+  // One palette per track: concurrent layers asking for the same artwork
+  // share one extraction via the in-flight dedup in lib/palette.ts, and the
+  // page palette in NowPlaying below reads the same cache.
+  const lowRam = isLowMemoryDevice();
   return (
     <div className={`absolute inset-0 ${enter ? "fs-bg-in" : ""}`}>
       <div
@@ -88,8 +97,9 @@ function FsBackdropLayer({
       />
       {artwork && !legacy && (
         <img
-          src={upgradeArtwork(artwork, 1200)}
+          src={upgradeArtwork(artwork, 256)}
           alt=""
+          decoding="async"
           className="absolute inset-0 h-full w-full object-cover brightness-[0.88] saturate-[1.65] blur-[52px]"
           style={{
             transform: "scale(1.36)",
@@ -113,9 +123,11 @@ function FsBackdropLayer({
           background: `radial-gradient(circle 480px at 58% 58%, rgb(${palette.wash} / ${boost ? 0.46 : 0.34}), transparent 70%)`,
         }}
       />
-      {/* Liquid Aurora moving gradient layer 3 (flowing angled mesh wave) */}
+      {/* Liquid Aurora moving gradient layer 3 (flowing angled mesh wave).
+          mix-blend-screen forces an extra compositing pass per frame, so
+          low-RAM devices drop the blend and keep the plain gradient. */}
       <div
-        className={`absolute -inset-[25%] liquid-aurora-wave mix-blend-screen pointer-events-none ${playing ? "" : "liquid-aurora-paused"}`}
+        className={`absolute -inset-[25%] liquid-aurora-wave ${lowRam ? "" : "mix-blend-screen"} pointer-events-none ${playing ? "" : "liquid-aurora-paused"}`}
         style={{
           background: `linear-gradient(130deg, transparent 15%, rgb(${palette.accent} / 0.24) 38%, transparent 55%, rgb(${palette.wash} / 0.28) 75%, transparent 95%)`,
         }}
@@ -155,9 +167,11 @@ function FsBackdrop({
 
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+      {/* Layers are distinct artworks by construction (the effect only
+          appends when the id changed), so the artwork URL is a stable key. */}
       {layers.map((layerId, i) => (
         <FsBackdropLayer
-          key={`${layerId}-${i}`}
+          key={layerId}
           artwork={layerId === "none" ? null : layerId}
           boost={boost}
           legacy={legacy}
@@ -292,7 +306,7 @@ function MobileSeekBar() {
           className="pointer-events-none absolute -top-11 z-30 -translate-x-1/2 transition-transform duration-75 ease-out animate-scale-in"
           style={{ left: `${Math.max(6, Math.min(94, pct))}%` }}
         >
-          <div className="relative flex items-center gap-1.5 rounded-full bg-white/25 px-3 py-1 shadow-2xl backdrop-blur-xl border border-white/30">
+          <div className="relative flex items-center gap-1.5 rounded-full bg-white/25 px-3 py-1 shadow-2xl glass-chip border border-white/30">
             <span className="font-display text-[12.5px] font-extrabold tabular-nums text-white drop-shadow">
               {fmtTime(shown)}
             </span>
@@ -536,19 +550,9 @@ export function NowPlaying() {
   const toggleShuffle = usePlayer((s) => s.toggleShuffle);
   const repeat = usePlayer((s) => s.repeat);
   const cycleRepeat = usePlayer((s) => s.cycleRepeat);
-  const volume = usePlayer((s) => s.volume);
-  const setVolume = usePlayer((s) => s.setVolume);
 
   const [mobileSheet, setMobileSheet] = useState<"queue" | null>(null);
   const [showSleepTimer, setShowSleepTimer] = useState(false);
-  const [showAudioQuality, setShowAudioQuality] = useState(false);
-  const [enhancerTab, setEnhancerTab] = useState<"eq" | "specs">("eq");
-  const eqEnabled = useSettings((s) => s.eqEnabled);
-  const eqPreset = useSettings((s) => s.eqPreset);
-  const eqBands = useSettings((s) => s.eqBands);
-  const setEqEnabled = useSettings((s) => s.setEqEnabled);
-  const setEqPreset = useSettings((s) => s.setEqPreset);
-  const setEqBand = useSettings((s) => s.setEqBand);
   const timerActive = useSleepTimer((s) => s.active);
   const timerSeconds = useSleepTimer((s) => s.secondsRemaining);
   const timerMode = useSleepTimer((s) => s.mode);
@@ -565,10 +569,6 @@ export function NowPlaying() {
     (window as any).__bytuneCloseMobileSheet = (): boolean => {
       if (showSleepTimer) {
         setShowSleepTimer(false);
-        return true;
-      }
-      if (showAudioQuality) {
-        setShowAudioQuality(false);
         return true;
       }
       if (mobileLyrics) {
@@ -588,7 +588,7 @@ export function NowPlaying() {
     return () => {
       delete (window as any).__bytuneCloseMobileSheet;
     };
-  }, [mobileSheet, mobileLyrics, showSleepTimer, showAudioQuality, open, close]);
+  }, [mobileSheet, mobileLyrics, showSleepTimer, open, close]);
 
   const [dragY, setDragY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -659,12 +659,63 @@ export function NowPlaying() {
     setDragY(0);
   };
 
+  // Entrance, decided once per opening (layout effect so the choice lands
+  // before the first painted frame):
+  // - "flip": on mobile with the mini-player pill on screen, the overlay
+  //   morphs from the pill's rect via WAAPI (transform/opacity only) — the
+  //   Apple Music hero morph, reusing the pill's own geometry.
+  // - "slide": everywhere else, the CSS slide-up (translateY 100% -> 0).
+  // - "fade": reduced motion — a plain fade, no travel at all.
+  // If any measurement fails, the FLIP effect below simply does nothing and
+  // the overlay opens at identity — never a half-morphed frame.
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const [enterMode, setEnterMode] = useState<"flip" | "slide" | "fade">("slide");
+  const prevOpenRef = useRef(open);
+  useLayoutEffect(() => {
+    if (open && !prevOpenRef.current) {
+      const reduced =
+        document.documentElement.classList.contains("reduce-motion") ||
+        (typeof window.matchMedia === "function" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      const pill = document.querySelector(".mobile-player");
+      setEnterMode(reduced ? "fade" : pill && isMobile ? "flip" : "slide");
+    }
+    prevOpenRef.current = open;
+  }, [open, isMobile]);
+
+  useLayoutEffect(() => {
+    if (!mounted || enterMode !== "flip" || exiting) return;
+    const root = overlayRef.current;
+    const pill = document.querySelector(".mobile-player");
+    if (!root || !pill) return;
+    const r = pill.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    if (r.width < 8 || r.height < 8 || vw === 0 || vh === 0) return;
+    const anim = root.animate(
+      [
+        {
+          transform: `translate(${r.left}px, ${r.top}px) scale(${r.width / vw}, ${r.height / vh})`,
+          transformOrigin: "top left",
+          opacity: 0.6,
+        },
+        { transform: "translate(0px, 0px) scale(1, 1)", transformOrigin: "top left", opacity: 1 },
+      ],
+      { duration: 420, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "both" }
+    );
+    // Release the animation once it finishes so the swipe-down drag (inline
+    // transform) owns the element again; cancelling returns it to identity.
+    void anim.finished.then(() => anim.cancel()).catch(() => undefined);
+    return () => anim.cancel();
+  }, [mounted, enterMode, exiting]);
+
   if (!mounted) return null;
 
   return (
     <div
+      ref={overlayRef}
       className={`fixed inset-0 z-[100] overflow-hidden bg-black select-none ${
-        exiting ? "fs-exiting" : "animate-fade-in"
+        exiting ? "fs-exiting" : enterMode === "slide" ? "np-enter" : enterMode === "fade" ? "animate-fade-in" : ""
       }`}
       style={{
         transform: isMobile && dragY > 0 ? `translate3d(0, ${dragY}px, 0) scale(${Math.max(0.86, 1 - dragY * 0.0006)})` : undefined,
@@ -773,7 +824,7 @@ export function NowPlaying() {
                   >
                     {canvasUrl && animatedCanvas ? (
                       <>
-                        <img src={upgradeArtwork(track.thumb, 1200)} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                        <img src={upgradeArtwork(track.thumb, 1200)} alt="" decoding="async" className="absolute inset-0 w-full h-full object-cover" />
                         <video
                           key={canvasUrl}
                           ref={canvasVideoRef}
@@ -789,7 +840,7 @@ export function NowPlaying() {
                       <img
                         key={track.id}
                         src={upgradeArtwork(track.thumb, 1200)}
-                        alt=""
+                        alt="" decoding="async"
                         className="w-full h-full object-cover animate-art-in"
                       />
                     ) : (
@@ -810,14 +861,6 @@ export function NowPlaying() {
                     {track.artist}
                   </div>
                   <div className="flex items-center gap-1.5 mt-1.5">
-                    <button
-                      onClick={() => setShowAudioQuality(true)}
-                      title="Audio specifications"
-                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[5px] bg-white/[0.08] hover:bg-white/[0.14] active:scale-95 transition-all text-[10px] font-extrabold tracking-wider text-white/80 uppercase"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Lossless
-                    </button>
                     {timerActive && (
                       <button
                         onClick={() => setShowSleepTimer(true)}
@@ -863,9 +906,7 @@ export function NowPlaying() {
                   <button
                     onClick={() => {
                       toggleLike(track);
-                      if (typeof navigator !== "undefined" && navigator.vibrate) {
-                        navigator.vibrate(15);
-                      }
+                      haptic("success");
                     }}
                     aria-label={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
                     aria-pressed={liked}
@@ -900,7 +941,10 @@ export function NowPlaying() {
                 </button>
 
                 <button
-                  onClick={toggle}
+                  onClick={() => {
+                    toggle();
+                    haptic("light");
+                  }}
                   aria-label={playing ? "Pause" : "Play"}
                   className="grid h-16 w-16 place-items-center rounded-full bg-white text-black active:scale-95 transition-transform shadow-lg"
                 >
@@ -930,36 +974,6 @@ export function NowPlaying() {
                 </MobileTransportButton>
               </div>
 
-              {/* Mobile Volume Slider with Speaker Glyphs */}
-              <div className="shrink-0 flex items-center gap-2.5 px-3 py-1 mb-2 text-white/60">
-                <button
-                  onClick={() => setVolume(0)}
-                  aria-label="Mute"
-                  className="p-1 -ml-1 text-white/40 hover:text-white transition-colors"
-                >
-                  <Volume1 className="w-4 h-4" />
-                </button>
-                <div className="relative flex-1 h-5 flex items-center">
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    value={volume}
-                    onChange={(e) => setVolume(Number(e.target.value))}
-                    aria-label="Volume slider"
-                    className="apple-volume-slider w-full h-1 rounded-full appearance-none bg-white/20 accent-white cursor-pointer"
-                  />
-                </div>
-                <button
-                  onClick={() => setVolume(1)}
-                  aria-label="Full volume"
-                  className="p-1 -mr-1 text-white/40 hover:text-white transition-colors"
-                >
-                  <Volume2 className="w-4 h-4" />
-                </button>
-              </div>
-
               {/* Actions Row */}
               <div className="shrink-0 flex items-center justify-between px-3 text-white/60">
                 <button
@@ -987,14 +1001,17 @@ export function NowPlaying() {
 
           {/* Queue sheet (lyrics are a full-screen swap above, not a sheet) */}
           {mobileSheet === "queue" && (
-            <MobileSheet onClose={() => setMobileSheet(null)}>
+            <MobileSheet onClose={() => setMobileSheet(null)} label="Queue">
               <MobileQueue onClose={() => setMobileSheet(null)} />
             </MobileSheet>
           )}
 
           {/* Apple Music Sleep Timer Sheet */}
           {showSleepTimer && (
-            <MobileSheet onClose={() => setShowSleepTimer(false)}>
+            <MobileSheet onClose={() => setShowSleepTimer(false)} label="Sleep timer">
+              <div className="pt-2.5 pb-1 flex justify-center" data-sheet-grabber>
+                <span className="block h-1 w-10 rounded-full bg-white/20" aria-hidden />
+              </div>
               <div className="p-5 space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
                   <div className="flex items-center gap-2.5">
@@ -1059,172 +1076,6 @@ export function NowPlaying() {
             </MobileSheet>
           )}
 
-          {/* Apple Music Sound Enhancer & Equalizer Modal */}
-          {showAudioQuality && (
-            <MobileSheet onClose={() => setShowAudioQuality(false)}>
-              <div className="p-5 space-y-4 max-h-[82vh] overflow-y-auto">
-                <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 text-emerald-400 flex items-center justify-center">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="text-[17px] font-bold text-white">Sound Enhancer</h3>
-                      <p className="text-[12px] text-white/50">Equalizer & Audio Quality</p>
-                    </div>
-                  </div>
-
-                  {/* Mode switch pills */}
-                  <div className="flex rounded-full bg-white/[0.08] p-0.5 text-[12px] font-bold">
-                    <button
-                      onClick={() => setEnhancerTab("eq")}
-                      className={`px-3 py-1 rounded-full transition-all ${
-                        enhancerTab === "eq" ? "bg-white text-black shadow" : "text-white/60 hover:text-white"
-                      }`}
-                    >
-                      EQ
-                    </button>
-                    <button
-                      onClick={() => setEnhancerTab("specs")}
-                      className={`px-3 py-1 rounded-full transition-all ${
-                        enhancerTab === "specs" ? "bg-white text-black shadow" : "text-white/60 hover:text-white"
-                      }`}
-                    >
-                      Specs
-                    </button>
-                  </div>
-                </div>
-
-                {enhancerTab === "eq" ? (
-                  <div className="space-y-4">
-                    {/* EQ On/Off toggle */}
-                    <div className="flex items-center justify-between px-3.5 py-3 rounded-xl bg-white/[0.05]">
-                      <div>
-                        <div className="text-[14px] font-semibold text-white">Equalizer Processing</div>
-                        <div className="text-[11.5px] text-white/50">{eqEnabled ? "Active profile applied" : "Bypass (Neutral output)"}</div>
-                      </div>
-                      <button
-                        onClick={() => setEqEnabled(!eqEnabled)}
-                        className={`relative w-12 h-6 rounded-full transition-colors ${
-                          eqEnabled ? "bg-emerald-500" : "bg-white/20"
-                        }`}
-                        aria-label="Toggle equalizer"
-                      >
-                        <span
-                          className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                            eqEnabled ? "translate-x-6" : "translate-x-0"
-                          }`}
-                        />
-                      </button>
-                    </div>
-
-                    {/* Presets row */}
-                    <div>
-                      <div className="text-[11.5px] font-bold uppercase tracking-wider text-white/45 mb-2 px-1">
-                        Sound Presets
-                      </div>
-                      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
-                        {EQ_PRESETS.map((p) => {
-                          const active = eqPreset === p.name;
-                          return (
-                            <button
-                              key={p.name}
-                              onClick={() => {
-                                setEqPreset(p.name);
-                                if (!eqEnabled) setEqEnabled(true);
-                              }}
-                              className={`shrink-0 px-3.5 py-1.5 rounded-full text-[12.5px] font-semibold transition-all active:scale-95 ${
-                                active
-                                  ? "bg-white text-black shadow-md font-bold"
-                                  : "bg-white/[0.08] text-white/70 hover:text-white"
-                              }`}
-                            >
-                              {p.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* 5-Band Sliders */}
-                    <div className="p-3.5 rounded-xl bg-white/[0.05] space-y-3">
-                      <div className="text-[11.5px] font-bold uppercase tracking-wider text-white/45 mb-1">
-                        5-Band Precision Response
-                      </div>
-                      {[
-                        { label: "60 Hz (Sub)", idx: 0 },
-                        { label: "250 Hz (Bass)", idx: 1 },
-                        { label: "1 kHz (Mid)", idx: 2 },
-                        { label: "4 kHz (Treble)", idx: 3 },
-                        { label: "16 kHz (Air)", idx: 4 },
-                      ].map(({ label, idx }) => {
-                        const val = eqBands[idx] ?? 0;
-                        return (
-                          <div key={label} className="space-y-1">
-                            <div className="flex justify-between text-[12px] font-medium">
-                              <span className="text-white/60">{label}</span>
-                              <span className="font-mono text-emerald-400 font-semibold tabular-nums">
-                                {val > 0 ? `+${val}` : val} dB
-                              </span>
-                            </div>
-                            <input
-                              type="range"
-                              min={-12}
-                              max={12}
-                              step={1}
-                              value={val}
-                              onChange={(e) => {
-                                setEqBand(idx, Number(e.target.value));
-                                if (!eqEnabled) setEqEnabled(true);
-                              }}
-                              className="w-full h-1.5 rounded-full appearance-none bg-white/20 accent-emerald-400 cursor-pointer"
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3 pt-1 text-[13.5px]">
-                    <div className="p-3.5 rounded-xl bg-white/[0.05] space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-white/50">Codec</span>
-                        <span className="text-white font-semibold">Opus / WebM Audio</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-white/50">Sample Rate</span>
-                        <span className="text-white font-semibold">48,000 Hz • 24-bit Stereo</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-white/50">Bitrate</span>
-                        <span className="text-white font-semibold">Up to 256 kbps (VBR)</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-white/50">Audio Normalization</span>
-                        <span className="text-emerald-400 font-semibold">Active (-14 LUFS EBU R128)</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-white/50">Storage State</span>
-                        <span className="text-white font-semibold">
-                          {isDlDone ? "Offline Lossless Blob" : "Direct Edge Stream"}
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-[12px] text-white/45 leading-relaxed">
-                      Streamed with high-fidelity audio bits preserving dynamic range and studio transient clarity.
-                    </p>
-                  </div>
-                )}
-
-                <button
-                  onClick={() => setShowAudioQuality(false)}
-                  className="w-full mt-2 py-3 rounded-xl bg-white text-black font-bold text-[14px] active:scale-95 transition-transform"
-                >
-                  Done
-                </button>
-              </div>
-            </MobileSheet>
-          )}
         </div>
       ) : (
         <div className="relative h-full flex flex-col">
@@ -1237,7 +1088,7 @@ export function NowPlaying() {
               escToastShown ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-3"
             }`}
           >
-            <div className="flex items-center gap-2.5 rounded-xl bg-[#1c1c1e]/95 px-4 py-3 shadow-float backdrop-blur-md">
+            <div className="flex items-center gap-2.5 rounded-xl bg-[#1c1c1e]/95 px-4 py-3 shadow-float glass-chip">
               <span className="text-[14.5px] text-white">To exit full screen, press</span>
               <kbd className="grid h-7 min-w-[36px] place-items-center rounded-[6px] bg-white/15 px-2 text-[13px] font-semibold text-white">
                 Esc
@@ -1326,7 +1177,7 @@ export function NowPlaying() {
                       {canvasUrl && animatedCanvas ? (
                         <>
                           {/* Still art underneath: if the video stalls, the cover stands. */}
-                          <img src={upgradeArtwork(track.thumb, 1200)} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                          <img src={upgradeArtwork(track.thumb, 1200)} alt="" decoding="async" className="absolute inset-0 w-full h-full object-cover" />
                           <video
                             key={canvasUrl}
                             ref={canvasVideoRef}
@@ -1342,7 +1193,7 @@ export function NowPlaying() {
                         <img
                           key={track.id}
                           src={upgradeArtwork(track.thumb, 1200)}
-                          alt=""
+                          alt="" decoding="async"
                           className="w-full h-full object-cover animate-art-in"
                         />
                       ) : (
@@ -1369,7 +1220,10 @@ export function NowPlaying() {
                   </div>
                   <div className="mt-4 inline-flex items-center gap-2.5">
                     <button
-                      onClick={() => toggleLike(track)}
+                      onClick={() => {
+                        toggleLike(track);
+                        haptic("success");
+                      }}
                       title={liked ? "Remove from Liked Songs" : "Add to Liked Songs"}
                       aria-pressed={liked}
                       className="inline-flex items-center gap-2 h-8 px-4 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/60 hover:text-white text-[12.5px] font-semibold transition-all active:scale-95"
@@ -1390,21 +1244,6 @@ export function NowPlaying() {
                         <Download className="w-3.5 h-3.5" />
                       )}
                       {isDlDone ? "Downloaded" : isDlActive ? "Downloading…" : "Download"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        useUI.getState().openDialog({
-                          title: "Lossless Audio Specifications",
-                          body: `• Audio Codec: Opus / WebM Audio\n• Sample Rate: 48,000 Hz • 24-bit Stereo\n• Bitrate: Up to 256 kbps Variable Bitrate\n• Audio Normalization: Active (-14 LUFS EBU R128)\n• Studio Dynamic Range: Preserved`,
-                          confirmLabel: "Done",
-                          onConfirm: () => {},
-                        });
-                      }}
-                      title="View audio specifications"
-                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-white/[0.06] hover:bg-white/[0.11] text-white/80 hover:text-white text-[11px] font-bold tracking-wider uppercase transition-all active:scale-95"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Lossless
                     </button>
                   </div>
                 </div>
@@ -1436,7 +1275,9 @@ export function NowPlaying() {
                       />
                     </div>
                   ) : (
-                    <QueuePanel onClose={() => setMode("lyrics")} />
+                    <Suspense fallback={<div className="flex-1" aria-hidden />}>
+                      <QueuePanel onClose={() => setMode("lyrics")} />
+                    </Suspense>
                   )}
                 </div>
               </div>
@@ -1445,7 +1286,9 @@ export function NowPlaying() {
 
           {/* The existing play bar — unchanged for desktop */}
           <div className="shrink-0">
-            <PlayerBar />
+            <Suspense fallback={<div aria-hidden />}>
+              <PlayerBar />
+            </Suspense>
           </div>
         </div>
       )}

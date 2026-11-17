@@ -14,6 +14,20 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "es2022",
-    chunkSizeWarningLimit: 4000,
+    chunkSizeWarningLimit: 500,
+    rollupOptions: {
+      output: {
+        // Vendor chunks: stable third-party code splits out of the app
+        // chunk so it caches separately and bloat stays visible. Chunk
+        // files are relative assets under dist/assets, so the file://
+        // Electron base ("./") is unaffected.
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+          "vendor-zustand": ["zustand"],
+          "vendor-lucide": ["lucide-react"],
+          "vendor-capacitor": ["@capacitor/core"],
+        },
+      },
+    },
   },
 });

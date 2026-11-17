@@ -33,7 +33,7 @@ function QueueCurrentRow({ track, playing }: { track: Track; playing: boolean })
         drag.dragging ? "opacity-40" : ""
       }`}
     >
-      <Artwork src={track.thumb} className="w-11 h-11 rounded-md shrink-0" iconClassName="w-4 h-4" alt="" />
+      <Artwork src={track.thumb} trackId={track.id} className="w-11 h-11 rounded-md shrink-0" iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0">
         <div className="text-[14px] font-semibold truncate text-ink-hi flex items-center gap-2">
           <span className="truncate">{track.title}</span>
@@ -67,7 +67,7 @@ function TrackRow({
         isCurrent ? "bg-ink-hi/[0.14]" : "hover:bg-ink-hi/[0.05]"
       } ${drag.dragging ? "opacity-40" : ""}`}
     >
-      <Artwork src={track.thumb} className="w-9 h-9 rounded-md shrink-0" iconClassName="w-3.5 h-3.5" alt="" />
+      <Artwork src={track.thumb} trackId={track.id} className="w-9 h-9 rounded-md shrink-0" iconClassName="w-3.5 h-3.5" alt="" />
       <div className="flex-1 min-w-0">
         <div className={`text-[13px] truncate font-semibold ${isCurrent ? "text-ink-hi" : "text-ink-hi"}`}>
           {track.title}
@@ -239,8 +239,10 @@ export function QueuePanel({ onClose }: { onClose: () => void }) {
               Nothing here yet — tracks you play land in Recently played.
             </div>
           ) : (
-            history.slice(0, 50).map((t, i) => (
-              <TrackRow key={`${t.id}-${i}`} track={t} onPlay={() => playTrack(t)} />
+            // History repeats tracks (same song played twice), so the same
+            // occurrence-keyed scheme as the queue above — not a raw index.
+            history.slice(0, 50).map((t) => (
+              <TrackRow key={stableKey(t.id)} track={t} onPlay={() => playTrack(t)} />
             ))
           )}
         </div>
@@ -341,7 +343,7 @@ function AboutArtistCard({
           3:2 frame showing the whole artist shot, not a cropped strip. */}
       <div className="relative aspect-[3/2] bg-ink-hi/[0.06]">
         {photo ? (
-          <img src={wideArtwork(photo)} alt="" className="w-full h-full object-cover object-top art-hairline" />
+          <img src={wideArtwork(photo)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover object-top art-hairline" />
         ) : (
           <div className="w-full h-full art-hairline" />
         )}

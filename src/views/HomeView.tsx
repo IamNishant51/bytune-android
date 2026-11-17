@@ -130,23 +130,39 @@ function SectionView({ section }: { section: HomeSection }) {
     }
     return (
       <ShelfScroller>
-        {section.items.map((item, i) => {
-          const key = `${section.id}-${item.style}-${i}`;
-          switch (item.style) {
-            case "track":
-              return <TrackCard key={key} track={item.track} />;
-            case "album":
-              return <AlbumCard key={key} album={item.album} />;
-            case "artist":
-              return <ArtistCard key={key} artist={item.artist} />;
-            case "mix":
-              return <MixCard key={key} item={item} />;
-            case "radio":
-              return <RadioCard key={key} item={item} />;
-            default:
-              return null;
-          }
-        })}
+        {(() => {
+          // Section items can repeat across styles, so keys carry an
+          // occurrence number per style+id instead of a raw index suffix.
+          const occurrence = new Map<string, number>();
+          return section.items.map((item) => {
+            const id =
+              item.style === "track"
+                ? item.track.id
+                : item.style === "album"
+                  ? item.album.id
+                  : item.style === "artist"
+                    ? item.artist.id
+                    : item.id;
+            const base = `${section.id}-${item.style}-${id}`;
+            const n = occurrence.get(base) ?? 0;
+            occurrence.set(base, n + 1);
+            const key = n === 0 ? base : `${base}#${n}`;
+            switch (item.style) {
+              case "track":
+                return <TrackCard key={key} track={item.track} />;
+              case "album":
+                return <AlbumCard key={key} album={item.album} />;
+              case "artist":
+                return <ArtistCard key={key} artist={item.artist} />;
+              case "mix":
+                return <MixCard key={key} item={item} />;
+              case "radio":
+                return <RadioCard key={key} item={item} />;
+              default:
+                return null;
+            }
+          });
+        })()}
       </ShelfScroller>
     );
   })();
@@ -289,7 +305,7 @@ function AppleHeroCarousel({ sections }: { sections: HomeSection[] }) {
   return (
     <div className="relative pt-1 animate-slide-up">
       <div className="flex gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory -mx-4 px-4 sm:mx-0 sm:px-0 pb-1">
-        {candidates.map((c) => (
+        {candidates.map((c, ci) => (
           <div
             key={c.id}
             onClick={c.onOpen}
@@ -298,6 +314,8 @@ function AppleHeroCarousel({ sections }: { sections: HomeSection[] }) {
             <img
               src={upgradeArtwork(c.thumb, 800)}
               alt=""
+              loading={ci === 0 ? "eager" : "lazy"}
+              decoding="async"
               className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
             />
             <div
@@ -367,12 +385,14 @@ function JumpBackInShelf() {
             <div
               key={track.id}
               onClick={() => playQueue(history, history.findIndex((t) => t.id === track.id))}
-              className="group shrink-0 w-[138px] sm:w-[152px] cursor-pointer select-none"
+              className="cv-card group shrink-0 w-[138px] sm:w-[152px] cursor-pointer select-none"
             >
               <div className="relative aspect-square rounded-2xl overflow-hidden bg-white/[0.04] mb-2 shadow-md group-hover:shadow-xl transition-all">
                 <img
                   src={upgradeArtwork(track.thumb, 300)}
                   alt={track.title}
+                  loading="lazy"
+                  decoding="async"
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                 />
                 {/* 1-tap circular play button */}

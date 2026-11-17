@@ -104,6 +104,35 @@ export function collectRenderers(root: any, name: string): any[] {
 }
 
 /**
+ * Single-pass collection of several named renderers, bucketed by name, each
+ * bucket in document order. The traversal semantics match collectRenderers
+ * exactly — a node contributes its named child AND is recursed into, so the
+ * child itself is walked too — which means replacing N collectRenderers
+ * calls over the same tree with one call here changes nothing but the walk
+ * count. Home parsing used to walk the megabyte browse response once per
+ * shelf kind and again per shelf; one walk buckets everything up front.
+ */
+export function collectRenderersMulti(root: any, names: string[]): Record<string, any[]> {
+  const buckets: Record<string, any[]> = {};
+  for (const name of names) buckets[name] = [];
+  const visit = (node: any): void => {
+    if (node == null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+    for (const name of names) {
+      if (node[name] && typeof node[name] === "object") buckets[name].push(node[name]);
+    }
+    for (const value of Object.values(node)) {
+      if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(root);
+  return buckets;
+}
+
+/**
  * YTM Charts page (browseId FEmusic_charts) → home shelves. The region comes
  * from the session's `gl` — this is the provider's own per-market popularity
  * ranking ("Top songs", "Top artists", …), not a hand-built list. Song rows

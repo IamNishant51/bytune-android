@@ -10,6 +10,7 @@
  * or dismiss the newly opened sheet.
  */
 import { useEffect } from "react";
+import { haptic } from "./haptics";
 
 export function useTouchLongPress(): void {
   useEffect(() => {
@@ -48,11 +49,7 @@ export function useTouchLongPress(): void {
       timer = window.setTimeout(() => {
         if (!targetEl) return;
         suppressUntil = Date.now() + 650;
-        try {
-          navigator.vibrate?.(40);
-        } catch {
-          // ignore vibration errors
-        }
+        haptic("medium");
 
         const ev = new MouseEvent("contextmenu", {
           bubbles: true,

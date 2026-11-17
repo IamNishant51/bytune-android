@@ -24,13 +24,13 @@ the colorful album art and media rolling beneath them.
 |                                                       |
 |  +-------------------------------------------------+  |
 |  | Floating Mini-Player Pill (`.mobile-player`)    |  | <-- 14px floating inset
-|  | - Glass: blur(26px) saturate(190%) + fresnel    |  |
+|  | - Glass: blur(16px) saturate(160%) + fresnel    |  |
 |  | - Specular top bevel highlight + diagonal sheen |  |
 |  +-------------------------------------------------+  |
 |                                                       |
 |  +-------------------------------------------------+  |
 |  | Floating Capsule Nav (`.mobile-nav`)            |  | <-- Independent floating pill
-|  | - 5-tab navigation: Home, Explore, Search, etc. |  |
+|  | - 4-tab navigation: Home, Explore, Search, Library |  |
 |  +-------------------------------------------------+  |
 |                                                       |
 +-------------------------------------------------------+
@@ -67,10 +67,14 @@ edge, ByTune features **dual decoupled floating chrome pills**:
 
 ## 3. Optical Physics of Liquid Glass
 
-Every pane of glass in the app shares one recipe declared in `src/index.css`
-(`.glass, .glass-pill, .glass-card, .mobile-player, .mobile-nav, .mobile-subview-bar`).
-It is the four layers light actually meets, per Apple's Liquid Glass (WWDC25 §3) and its
-26 refinement (darker edge, brighter specular highlights):
+The shared recipe below is declared in `src/index.css` for `.glass`, `.glass-pill` and
+`.mobile-subview-bar`. It is the four layers light actually meets, per Apple's Liquid Glass
+(WWDC25 §3) and its 26 refinement (darker edge, brighter specular highlights). Two
+surfaces deliberately diverge from it (1.1.0 retune, measured in `src/index.css`): the dock
+pills (`.mobile-player`, `.mobile-nav`) override the refraction to a single
+`blur(16px) saturate(160%) brightness(1.04)` — the always-on surfaces pay the smallest
+kernel — and content cards (`.glass-card`) are solid with the fresnel rim and no backdrop
+blur at all (glass belongs on the control layer, never the content layer).
 
 ### A. Tint
 ```css
@@ -89,7 +93,8 @@ face catches; the radial one lets the current artwork's ambience tint the glass 
 ```css
 backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.05) contrast(.97);
 ```
-- **Blur** `22px` (`26px` in the dock): diffuses the lines beneath into colour fields.
+- **Blur** `22px` in the shared recipe; the dock pills override to `16px` (1.1.0), and
+  `.glass-card` pays no blur at all. Sheets stay `30px`, `.glass-btn` `20px`.
 - **Saturate** `190%`: re-amplifies colour the dark tint flattens.
 - **Brightness 1.05 / contrast 0.97**: light gathering inside the lens, slightly milky.
 
@@ -153,6 +158,7 @@ rendered as switches in `src/views/SettingsView.tsx` — `liquidGlass` is disabl
 | Interaction | Duration | Easing Curve | Target |
 |---|---|---|---|
 | Now Playing Open | 420ms | `cubic-bezier(0.32, 0.72, 0, 1)` | Full-screen translateY(100% -> 0) |
+| Mini-player → Now Playing morph | 420ms | `cubic-bezier(0.32, 0.72, 0, 1)` | WAAPI FLIP morph from the pill (1.1.0); identity fallback if the pill is gone; fade for reduced motion |
 | Sheet Open | 340ms | `var(--apple-spring-fluid)` | `mobile-sheet-up`: translateY(100%) -> 0 |
 | Sheet Dismiss | 220ms | `cubic-bezier(0.4, 0, 1, 1)` | `mobile-sheet-down` + `mobile-fade-out` backdrop; `onClose` fires 200ms later |
 | Player artwork swap | 260ms | `var(--ease-enter)` | `art-in` (fade + scale .94 -> 1) |
@@ -165,7 +171,7 @@ rendered as switches in `src/views/SettingsView.tsx` — `liquidGlass` is disabl
 
 A closing sheet must animate *out* before it unmounts: `MobileSheet` keeps it mounted with
 `.is-closing` and calls the caller's `onClose` on a 200ms timer (`src/mobile/MobileShell.tsx`).
-Both player-bar swaps are keyed on `track.id`, so the outgoing node is replaced rather than
+Sheets also dismiss by dragging the grabber (velocity-aware, 1.1.0). Both player-bar swaps are keyed on `track.id`, so the outgoing node is replaced rather than
 cross-faded — one animation, no stale text.
 
 ---
@@ -175,22 +181,28 @@ cross-faded — one animation, no stale text.
 Real-time backdrop filters on mobile can cause GPU fillrate bottlenecks if not composited
 correctly. ByTune enforces strict hardware acceleration constraints:
 
-1. **Dedicated GPU Compositing Layers**:
-   - `.mobile-player` and `.mobile-nav` enforce `transform: translateZ(0)` and `will-change: transform`.
-   - This isolates both floating chrome elements onto dedicated hardware texture layers, preventing
-     costly repaint passes during viewport scrolling.
+1. **No permanent `will-change`.** The chrome, aurora and sheets used to carry permanent
+   `will-change: transform`, pinning GPU layers forever. Removed in 1.1.0; `will-change`
+   survives only where an animation is actively running (the sheet while dragged, the
+   onboarding ambient). Layers are created for the animation, not for the lifetime of the
+   surface.
 
 2. **CSS Containment**:
    - `contain: layout style` bounds layout invalidation to the pills themselves, preventing
      parent reflow cascades.
+   - `content-visibility: auto` on rows (56px) and cards (220px), mobile only (1.1.0):
+     off-screen rows skip layout/paint until scrolled into view.
 
 3. **Inertia Scrolling**:
-   - `#view-scroll` applies `-webkit-overflow-scrolling: touch` and `will-change: scroll-position`
-     for 60-120 FPS momentum scrolling.
+   - `#view-scroll` applies `-webkit-overflow-scrolling: touch` for momentum scrolling.
+     (An earlier draft of this document claimed `will-change: scroll-position` here; the
+     CSS never had it — corrected 2026-11-17.)
 
 4. **Refraction Kernel Tuning**:
-   - `blur(22px)` on surfaces, `26px` in the dock, `30px` on sheets — tuned by eye at 412dp.
+   - `blur(16px)` in the dock, `22px` on shared glass, `30px` on sheets, `20px` on glass
+     buttons, solid cards — tuned by eye at 412dp, retuned in 1.1.0 for the 4 GB phone.
      Bigger kernels were not visibly different on artwork and cost a wider texture fetch.
+     No FPS figure has ever been measured; "60 FPS" is a target, not a result.
 
 5. **Known environment gap — `backdrop-filter` on the emulator.**
    `npx tsc`/CSS cannot catch this: the recipe is correct and computes correctly, but the
@@ -225,10 +237,12 @@ In alignment with Apple Music 7.0:
 
 ## 9. Universal Liquid Glass Surfaces
 
-Beyond the floating mini-player and bottom navigation pills, the same material
-(§3, one declaration) covers every pane:
-1. **Glass cards (`.glass-card`)**: shared tint + `blur(22px)`, the masked fresnel ring, and a
-   `20px` radius fallback for cards that set none. Overlays still set their own radius utility.
+Beyond the floating mini-player and bottom navigation pills, the material (§3) covers
+every pane — with cards solid since 1.1.0 (glass on the control layer, never the content
+layer):
+1. **Glass cards (`.glass-card`)**: solid `rgb(var(--panel))` fill + the masked fresnel
+   ring, no backdrop blur, and a `20px` radius fallback for cards that set none. Overlays
+   still set their own radius utility.
 2. **Search field (`.mobile-search input`)**: `44px` capsule at `rgb(var(--lg-tint) / .55)`.
    Focus does not flood the field — it brightens the bevel: fill to `.72` and the inner
    specular line from `.22` to `.34`.
@@ -242,8 +256,9 @@ Beyond the floating mini-player and bottom navigation pills, the same material
 5. **Sub-view bars (`.mobile-subview-bar`)**: Settings/Downloads header, `54px`, full-bleed
    radius `0`, shared tint + ring + shadow.
 6. **Popovers (`.glass-strong`)**: `rgba(17,17,19,.98)` — effectively opaque, because a floating
-   menu is read over bright artwork and dense text. `.glass-strong-solid` drops the
-   `backdrop-filter` entirely for menus nested inside another `backdrop-filter` ancestor.
+   menu is read over bright artwork and dense text, and no backdrop blur is paid at all.
+   `.glass-strong-solid` is the same solid treatment for menus nested inside another
+   `backdrop-filter` ancestor.
 
 Scroll chrome is desktop-only: the `@media (max-width: 860px)` block removes the `14px`
 scrollbar gutter and hides the scrollbar, so the phone canvas is the full 412dp wide.
@@ -258,11 +273,18 @@ Offline listening is designed around seamless 1-tap caching:
    - State indicator toggles between Download Cloud, Active Progress Spinner, and Checkmark.
 2. **Tracklist & Playlist Actions**:
    - Every song row includes a contextual sheet action (`src/lib/trackActions.ts`) with immediate visual feedback.
-   - Playlist views feature header-level "Download All" glass pill to queue entire sets with automatic retry and rate-limiting.
+   - Playlist views feature header-level "Download All" glass pill to queue entire sets with automatic retry and a bounded FIFO queue (2 concurrent, 1 on low-memory devices).
 3. **High-Performance Audio Pipeline**:
-   - Resolves via modern VisionOS client spec with watch session cookies (`src/mobile/innertube.ts`), bypassing botguard barriers.
-   - 10-minute in-memory stream resolution caching (`src/mobile/music.ts`) eliminates duplicate network overhead.
-   - Audio tracks are persisted locally to device storage (`src/lib/downloads.ts`) with metadata tagging and album art caching for instantaneous zero-latency offline playback.
+   - Resolves via a parallel VISIONOS + ANDROID_VR race (loser cancelled) behind a ~12s
+     deadline, with watch session cookies (`src/mobile/innertube.ts`), bypassing botguard
+     barriers; Piped is the last fallback.
+   - Expiry-aware stream cache (20 entries, 60s early expiry) eliminates duplicate
+     network overhead; a 403 re-resolves with `forceRotate` and restores position.
+   - Audio tracks download as sequential 1 MiB `Range` chunks through the loopback proxy
+     with resume, retry and real byte progress, and persist to IndexedDB
+     (`src/mobile/offline.ts`, D19) with metadata tagging and ≤256px album art caching
+     for zero-latency offline playback. A FIFO queue (2 concurrent, 1 on low-memory
+     devices) serializes playlist downloads.
 
 ---
 

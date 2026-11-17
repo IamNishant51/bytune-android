@@ -3,14 +3,13 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { storage } from "../lib/persist";
 
-export type StreamQuality = "low" | "medium" | "high" | "lossless";
+export type StreamQuality = "low" | "medium" | "high";
 export type DownloadQuality = "standard" | "high" | "lossless";
 
 export const STREAM_QUALITY_LABEL: Record<StreamQuality, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
-  lossless: "Lossless",
 };
 
 export const DOWNLOAD_QUALITY_LABEL: Record<DownloadQuality, string> = {
@@ -168,6 +167,17 @@ export const useSettings = create<SettingsState>()(
     {
       name: "settings",
       storage: createJSONStorage(() => storage),
+      version: 1,
+      migrate: (persisted) => {
+        // v0 → v1: the "lossless" streaming option never changed the
+        // rendition (streams are lossy Opus/AAC) and no longer exists —
+        // stored installs that picked it land on "high" (uncapped).
+        const state = (persisted ?? {}) as Partial<SettingsState> & Record<string, unknown>;
+        if ((state.streamingQuality as string) === "lossless") {
+          state.streamingQuality = "high";
+        }
+        return state as SettingsState;
+      },
     }
   )
 );

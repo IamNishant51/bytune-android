@@ -12,15 +12,12 @@ Every claim you make must name a command and quote its output (`AGENTS.md` §3).
 | Gate | Command | Pass condition |
 |---|---|---|
 | G0 | `npx tsc --noEmit` | exit 0, no output |
-| G1 | `npm test` | `fail 0` (currently 279 pass) |
+| G1 | `npm test` | **NO SUITE EXISTS.** `npm test` → `Missing script: "test"` (verified 2026-11-17). There are no test files and no `scripts/` directory. Do not cite test counts — every past "279/286 tests pass" claim is void. G1 passes only when a suite exists and is green. |
 | G2 | `npm run build` | `✓ built in …` |
 | G3 | `npx cap sync android` then `./gradlew.bat assembleDebug` | `BUILD SUCCESSFUL` |
 | G4 | device run of the changed behaviour | observed result + `logcat`/CDP evidence |
 | G5 | screenshot at the sizes in `RESPONSIVE.md` §7 | read back, checked |
 | G6 | `docs/android/STATUS.md` updated | task moved, evidence line added |
-
-G1 takes 13 s on a warm machine, up to 8 min cold. Run it in the background while doing other
-work rather than blocking on it.
 
 ---
 
@@ -33,6 +30,11 @@ export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 ```
 
 `JAVA_HOME`/`ANDROID_HOME` are **not** set globally. Every Gradle command needs them inline.
+
+These paths are the Windows workstation. The Muse VM has Node only — no JDK, no Android
+SDK — so G3 cannot run there; the CI workflow (`.github/workflows/android-release.yml`,
+see `docs/android/CI-RELEASE.md`) is what verifies Kotlin compilation for changes made
+outside the workstation.
 
 ---
 
@@ -329,7 +331,7 @@ Include: the command, the output, the screenshot path, and the files changed.
 
 ## 9. Regression checklist before calling a phase done
 
-- [ ] G0–G6 all green and quoted
+- [ ] G0, G2–G6 all green and quoted (G1 is N/A until a test suite exists — see §1; do not claim it)
 - [ ] Desktop path still builds (`npm run build` builds both targets)
 - [ ] Fresh install → onboarding → play, on a clean `adb uninstall`
 - [ ] Background playback for at least 10 minutes

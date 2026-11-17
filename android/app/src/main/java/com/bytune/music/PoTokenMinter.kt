@@ -39,7 +39,7 @@ class PoTokenMinter(private val context: Context) {
         const val GOOG_API_KEY = "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw"
         const val UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        const val TIMEOUT_MS = 60_000L
+        const val TIMEOUT_MS = 15_000L
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -48,9 +48,25 @@ class PoTokenMinter(private val context: Context) {
     @Volatile private var finished = false
     private var timeout: Runnable? = null
 
+    // Mint serialization: one mint at a time. mint() runs on the main thread,
+    // so the busy check and set cannot race; finish() clears it from either
+    // thread (timeout on main, mintDone on the JS bridge thread).
+    @Volatile private var busy = false
+    @Volatile private var pendingResult: ((String?) -> Unit)? = null
+
     /** Resolves with the token, or null when minting failed (caller falls back). */
     fun mint(visitorData: String, onResult: (String?) -> Unit) {
         main.post {
+            if (busy) {
+                // The JS side single-flights mints, so this is belt and
+                // suspenders: reject rather than overlap two hidden WebViews
+                // sharing one finished flag. Null keeps the caller falling
+                // back exactly as a failed mint does.
+                Log.w(TAG, "mint rejected: another mint is in progress")
+                onResult(null)
+                return@post
+            }
+            busy = true
             try {
                 start(visitorData, onResult)
             } catch (err: Throwable) {
@@ -62,9 +78,25 @@ class PoTokenMinter(private val context: Context) {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun start(visitorData: String, onResult: (String?) -> Unit) {
+        // Never leak a previous WebView if start() is ever reached while one
+        // is alive (the busy guard in mint() should prevent it; this is the
+        // backstop). Drop its stale timeout too, or it would fire finish()
+        // against this mint. Runs on the main thread, so destroy() is legal.
+        timeout?.let { main.removeCallbacks(it) }
+        timeout = null
+        val previous = webView
+        webView = null
+        if (previous != null) {
+            try {
+                previous.destroy()
+            } catch (err: Throwable) {
+                Log.w(TAG, "previous webview destroy", err)
+            }
+        }
         // One minter instance serves every mint: without this reset the second
         // call's finish() is swallowed and its promise never resolves.
         finished = false
+        pendingResult = onResult
         val html = buildPage()
         val view = WebView(context)
         webView = view
@@ -163,6 +195,8 @@ class PoTokenMinter(private val context: Context) {
     private fun finish(token: String?, onResult: (String?) -> Unit) {
         if (finished) return
         finished = true
+        busy = false
+        pendingResult = null
         timeout?.let { main.removeCallbacks(it) }
         val view = webView
         webView = null
@@ -173,6 +207,23 @@ class PoTokenMinter(private val context: Context) {
                 Log.w(TAG, "webview destroy", err)
             }
             onResult(token)
+        }
+    }
+
+    /**
+     * Cancels an in-flight mint, if any: destroys the hidden WebView and
+     * resolves the pending callback with null (no token — the caller falls
+     * back, exactly as for a failed mint). A no-op when no mint is running
+     * or the mint already finished. Called from the `cancelPoToken` plugin
+     * method when the JS side stops waiting for the token.
+     */
+    fun cancel() {
+        main.post {
+            val pending = pendingResult
+            if (pending != null && !finished) {
+                Log.d(TAG, "mint cancelled")
+                finish(null, pending)
+            }
         }
     }
 

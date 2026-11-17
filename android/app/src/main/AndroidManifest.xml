@@ -3,6 +3,7 @@
 
     <application
         android:allowBackup="true"
+        android:hardwareAccelerated="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
@@ -75,4 +76,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Normal permission, no runtime prompt: lets the existing
+         navigator.vibrate call sites work reliably. performHapticFeedback
+         (the shell plugin's haptic method) needs no permission. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 </manifest>

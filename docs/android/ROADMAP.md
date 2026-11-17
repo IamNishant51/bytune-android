@@ -9,6 +9,10 @@ feature gap, P4 makes it right on every screen, P5 makes it not fall over, P6 sh
 
 Legend: `[ ]` open · `[~]` in progress · `[x]` done (mirrored in STATUS.md).
 
+Note (2026-11-17): the P1/P2 intros describe the state when this roadmap was written
+(Oct 2026). P1 and P2 are complete per `STATUS.md`; read the intros as history, not as
+the current state.
+
 ---
 
 ## P1 — Shell parity on a phone (the app must feel complete before anything else)
@@ -56,25 +60,26 @@ but the WebView's implementation does not create a system notification.
 
 ## P3 — Feature parity with the desktop
 
-Today's honest gaps, all verified in `src/mobile/bridge.ts`: downloads **reject**, local
-files return `null`, canvas returns `null`, no cloud sync, no backup import/export.
+Honest gaps as of 2026-11-17: downloads are implemented (chunked resumable engine, 1.1.0,
+unverified on device); local files return `null`; canvas returns `null`; Google sign-in is
+implemented but cloud sync returns fake success (see D18); no backup import/export.
 
 | ID | Task | Acceptance check |
 |---|---|---|
 | A-301 | Downloads on Android: resolve → download to app storage with progress, resume, delete, "Downloaded" tab and tile restored. | Download an album → files land on disk, the Downloaded tab lists it, it plays offline with the network off. |
 | A-302 | Local music import via the system file picker (SAF), persisted as a content URI, playable after reboot. | Pick a folder/file → tracks appear in Local Music; force-stop, reopen → still playable. |
 | A-303 | Canvas (the animated artwork behind Now Playing) on Android. Desktop: `electron/canvas.ts` → `src/lib/canvas.ts`. | Open Now Playing for a track with canvas → video loops behind the artwork; absent → static art, no error. |
-| A-304 | Lyrics provider parity: audit which providers `electron/lyrics.ts` actually uses; match them where the network allows. | Side-by-side with desktop for 5 tracks → same lyrics source and same sync offsets. |
+| A-304 | Lyrics provider parity: the desktop 14-provider engine is ported in code (1.1.0, `src/lib/lyricsEngine.ts`, lazy-loaded) with word-level sync; verify it on device. (Rewritten 2026-11-17: the original audit premise is stale — the port happened instead of the audit. See D20.) | Side-by-side with desktop for 5 tracks → same lyrics source and same sync offsets; word-level sync advances; offline cached lyrics serve with the network off. |
 | A-305 | Crossfade verified on device (dual-element equal-power blend). | Set crossfade 4 s → track boundary has no gap and no volume dip; measured by listening + position log. |
 | A-306 | Automix verified on device (BPM analysis via `src/lib/analysis.ts`). | Automix on → transition aligns to beats or shows the honest fallback toast; no crash on decode failure. |
 | A-307 | Skip silence verified on device (decode-based edge scan). | Track with a 3 s intro silence → playback starts after it; head-trim offset applied to lyrics. |
 | A-308 | Playback speed verified on device, pitch preserved, persisted across restart. | Set 1.5× → speed changes, pitch holds, reopening the app keeps 1.5×. |
 | A-309 | Backup export/import (`src/views/SettingsView.tsx` → "Your data"). Currently desktop-only. | Export writes a file to a user-chosen location; import restores library and history on a wiped install. |
-| A-310 | Accounts + cloud sync decision (Supabase exists in `supabase/`). Either implement Google sign-in + sync or keep guest-only and hide the account group permanently. | Decision recorded as an ADR; the UI matches the decision with no dead entry points. |
+| A-310 | Accounts + cloud sync decision (Supabase exists in `supabase/`). Google sign-in is implemented; the open decision is sync: implement real sync, or stay local-only and make `syncNow`/`syncBackupNow`/`syncRestoreNow` reject honestly instead of returning fake `{ok: true}`. (Rewritten 2026-11-17; see D18.) | Decision recorded as an ADR; the UI matches the decision with no dead entry points; no method claims success it did not earn. |
 | A-311 | PiP mini-window: permanently `HIDDEN` on Android (OS-level PiP is a different feature; do not conflate). | No PiP entry point on Android; ADR records why. |
 | A-312 | "Don't repeat suggestions", "Reduce motion", appearance/theme rows — confirm each behaves on Android or hide it. | Each Settings row is exercised once; row either changes behaviour or is hidden. |
 | A-313 | Sort a playlist's tracks (local and remote): Title, Artist, Album, Duration, plus "Custom order" to restore the stored arrangement; tapping the active key reverses it. | Open a playlist → "⋯" → Sort → Title → rows reorder alphabetically; open a remote playlist → Sort → Duration → 49 rows arrive in ascending length order; Custom order restores the original order. |
-| A-314 | One shared Liquid Glass material for every pane (tint · refraction · masked fresnel rim · light), Apple-style press illumination and tab lens, sheet exit animation, player artwork/meta swap, and removal of the desktop scroll gutter on the phone. | Computed `backdrop-filter`/`background` on `.mobile-player` at 412dp matches the recipe; the pill and nav are inset 14dp with `scrollWidth === innerWidth === 412`; a sheet mounts, gets `.is-closing` and unmounts after the exit animation. |
+| A-314 | One shared Liquid Glass material for every pane (tint · refraction · masked fresnel rim · light), Apple-style press illumination and tab lens, sheet exit animation, player artwork/meta swap, and removal of the desktop scroll gutter on the phone. | Computed `backdrop-filter`/`background` on `.mobile-player` at 412dp matches the current recipe (1.1.0: dock `blur(16px) saturate(160%) brightness(1.04)`, `.glass-card` solid); the pill and nav are inset 14dp with `scrollWidth === innerWidth === 412`; a sheet mounts, gets `.is-closing` and unmounts after the exit animation. (Acceptance updated 2026-11-17 for the 1.1.0 retune; the original 26px recipe is superseded.) |
 | A-315 | Player bar kept every previous cover: both siblings in `.mobile-player-meta` used `key={track.id}`, so React saw duplicate sibling keys and appended a new art node per track instead of replacing it. | Play four tracks in a row → `document.querySelectorAll(".mobile-player-art").length === 1` after each, and the row shows one cover with the title back at full width. |
 
 ---
@@ -132,7 +137,9 @@ Target: Android/Material 3 window size classes (see `RESPONSIVE.md`).
 
 - **Play Store publishing** — no AAB, no store listing, no review compliance work.
 - **Android Auto / Automotive** — separate surface, out of scope.
-- **Home-screen widgets** — out of scope.
+- **Home-screen widgets** — REMOVED 2026-11-17: a widget was implemented
+  (`MusicAppWidgetProvider.kt`, verified in `dumpsys appwidget`); the non-goal no longer
+  holds. Kept here as a struck record, not deleted.
 - **Chromecast / Spotify Connect-style casting** — out of scope.
 - **Multi-user profiles** — out of scope.
 - **A rewrite of the renderer in native Compose** — rejected in ADR D1; the shared renderer is the point.

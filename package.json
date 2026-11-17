@@ -2,7 +2,7 @@
   "name": "bytune-android",
   "productName": "ByTune",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.1.0",
   "author": "ByTune",
   "description": "ByTune for Android (Capacitor build of the ByTune renderer). Desktop Electron app lives upstream.",
   "main": "dist-electron/main.js",

@@ -48,9 +48,14 @@ function searchSections(rows: SearchRow[], filter: SearchFilter): SearchSection[
   return sections.filter((section) => section.rows.length > 0);
 }
 
-function rowKey(row: SearchRow, i: number): string {
-  if (row.kind === "browse") return `b:${row.item.browseId}`;
-  return `v:${row.song.id}-${i}`;
+function rowKey(row: SearchRow, occurrence: Map<string, number>): string {
+  // A "top" row and a "track" row can carry the same song id, so a bare id
+  // is not unique — occurrence numbers per id keep keys stable without a
+  // raw index suffix.
+  const base = row.kind === "browse" ? `b:${row.item.browseId}` : `v:${row.song.id}`;
+  const n = occurrence.get(base) ?? 0;
+  occurrence.set(base, n + 1);
+  return n === 0 ? base : `${base}#${n}`;
 }
 
 /* ---------------------------------------------------------------- */
@@ -76,7 +81,7 @@ function SongSearchRow({ song, onPlay }: { song: Track; onPlay: () => void }) {
         drag.dragging ? "opacity-40" : ""
       }`}
     >
-      <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
+      <Artwork src={song.thumb} trackId={song.id} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
@@ -186,7 +191,7 @@ function TopResultCard({ song, onPlay }: { song: Track; onPlay: () => void }) {
           drag.dragging ? "opacity-40" : ""
         }`}
       >
-        <Artwork src={song.thumb} className="w-[72px] h-[72px] rounded-[10px] shrink-0" iconClassName="w-6 h-6" alt="" />
+        <Artwork src={song.thumb} trackId={song.id} className="w-[72px] h-[72px] rounded-[10px] shrink-0" iconClassName="w-6 h-6" alt="" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 font-display text-[20px] font-bold tracking-[-0.02em] text-ink-hi line-clamp-2">
             {song.explicit && <ExplicitBadge />}
@@ -332,6 +337,12 @@ export function SearchView() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  // Rendered rows are capped: the old infinite scroll appended forever and
+  // the DOM grew without bound. "Show more" reveals the next page; the
+  // sentinel only fetches another upstream page once everything loaded so
+  // far is visible.
+  const SEARCH_PAGE_SIZE = 60;
+  const [visibleCount, setVisibleCount] = useState(SEARCH_PAGE_SIZE);
 
   const trimmed = useMemo(() => query.trim(), [query]);
   const sessionKey = `${filter}:${trimmed.toLowerCase()}`;
@@ -342,6 +353,7 @@ export function SearchView() {
       setContinuation(null);
       setLoading(false);
       setError(null);
+      setVisibleCount(SEARCH_PAGE_SIZE);
       return;
     }
     const cached = cache.current.get(sessionKey);
@@ -350,6 +362,7 @@ export function SearchView() {
       setContinuation(cached.continuation);
       setLoading(false);
       setError(null);
+      setVisibleCount(SEARCH_PAGE_SIZE);
       return;
     }
     let cancelled = false;
@@ -358,6 +371,7 @@ export function SearchView() {
     setError(null);
     setRows([]);
     setContinuation(null);
+    setVisibleCount(SEARCH_PAGE_SIZE);
     window.bytune
       ?.searchPage(trimmed, filter)
       .then((page) => {
@@ -387,10 +401,14 @@ export function SearchView() {
 
   // BitChord mobile's paging rule: fetch the next page when the list nears its
   // end (a sentinel 4 rows before the bottom), merging without duplicates.
+  // The fetch only runs once the user has revealed everything loaded so far
+  // — with the render cap on, the sentinel would otherwise keep appending
+  // pages the user never asked to see.
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !continuation || loading || loadingMore || error) return;
+    if (rows.length > visibleCount) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((e) => e.isIntersecting)) return;
@@ -422,7 +440,7 @@ export function SearchView() {
     );
     observer.observe(el);
     return () => observer.disconnect();
-  }, [rows, continuation, loading, loadingMore, error, filter]);
+  }, [rows, continuation, loading, loadingMore, error, filter, visibleCount]);
 
   if (!trimmed) {
     return (
@@ -440,11 +458,14 @@ export function SearchView() {
 
   // Every playable song on the page, in page order — what a row click queues
   // through (the mobile app's `tracks` list, top result's song included).
-  const tracks: Track[] = rows
+  // Only revealed rows queue: unrevealed pages are not in the DOM yet.
+  const visibleRows = rows.slice(0, visibleCount);
+  const tracks: Track[] = visibleRows
     .filter((r) => r.kind === "top" || r.kind === "track")
     .map((r) => (r as { song: Track }).song);
-  const topSong = rows.find((r): r is Extract<SearchRow, { kind: "top" }> => r.kind === "top")?.song ?? null;
-  const sections = searchSections(rows, filter);
+  const topSong = visibleRows.find((r): r is Extract<SearchRow, { kind: "top" }> => r.kind === "top")?.song ?? null;
+  const sections = searchSections(visibleRows, filter);
+  const hiddenCount = rows.length - visibleRows.length;
 
   return (
     <div className="space-y-4">
@@ -494,26 +515,40 @@ export function SearchView() {
             <TopResultCard song={topSong} onPlay={() => playQueue([topSong], 0)} />
           )}
 
-          {sections.map((section) => (
-            <section key={section.title || "results"} className="mt-4">
-              {section.title && <h2 className="section-title text-[17px] mb-1.5">{section.title}</h2>}
-              <div>
-                {section.rows.map((row, i) => (
-                  <div key={rowKey(row, i)}>
-                    {row.kind === "top" ? null : row.kind === "track" ? (
-                      <SongSearchRow
-                        song={row.song}
-                        onPlay={() => playQueue(tracks, Math.max(0, tracks.findIndex((t) => t.id === row.song.id)))}
-                      />
-                    ) : (
-                      <BrowseSearchRow item={row.item} />
-                    )}
-                    {i < section.rows.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
-                  </div>
-                ))}
-              </div>
-            </section>
-          ))}
+          {sections.map((section) => {
+            const occurrence = new Map<string, number>();
+            return (
+              <section key={section.title || "results"} className="mt-4">
+                {section.title && <h2 className="section-title text-[17px] mb-1.5">{section.title}</h2>}
+                <div>
+                  {section.rows.map((row, i) => (
+                    <div key={rowKey(row, occurrence)} className="cv-row">
+                      {row.kind === "top" ? null : row.kind === "track" ? (
+                        <SongSearchRow
+                          song={row.song}
+                          onPlay={() => playQueue(tracks, Math.max(0, tracks.findIndex((t) => t.id === row.song.id)))}
+                        />
+                      ) : (
+                        <BrowseSearchRow item={row.item} />
+                      )}
+                      {i < section.rows.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+
+          {hiddenCount > 0 && (
+            <div className="mt-4 flex justify-center">
+              <button
+                onClick={() => setVisibleCount((n) => n + SEARCH_PAGE_SIZE)}
+                className="h-9 px-5 rounded-full bg-ink-hi/[0.06] hover:bg-ink-hi/[0.10] text-[13.5px] font-semibold text-ink-hi transition-colors active:scale-[0.98]"
+              >
+                Show more ({hiddenCount} more)
+              </button>
+            </div>
+          )}
 
           {loadingMore && (
             <div className="mt-2">

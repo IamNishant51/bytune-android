@@ -39,9 +39,10 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
   );
 
   // Artist-imported playlists wear the artist's photo, not a song cover —
-  // the page tint and the hero read from that same artwork.
+  // the page tint and the hero read from that same artwork. The palette is
+  // also the hero image's loading placeholder colour.
   const coverThumb = playlist?.artistThumb ?? playlist?.tracks[0]?.thumb ?? null;
-  useArtworkPalette(coverThumb);
+  const palette = useArtworkPalette(coverThumb);
 
   // Dropping songs onto this page is handled panel-wide in App (usePanelDrop).
 
@@ -111,7 +112,13 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
       <div className={`relative ${isMobile ? "-mx-4" : "-mx-10"} overflow-hidden`}>
         <div className="absolute inset-0">
           {coverThumb ? (
-            <img src={upgradeArtwork(coverThumb, 1200)} alt="" className="w-full h-full object-cover" />
+            <img
+              src={upgradeArtwork(coverThumb, 1200)}
+              alt=""
+              decoding="async"
+              style={{ backgroundColor: `rgb(${palette.wash})` }}
+              className="w-full h-full object-cover"
+            />
           ) : (
             /* Default cover — ByTune violet gradient with a big soft note
                watermark, Spotify's default-playlist-cover model. The bottom
@@ -246,12 +253,29 @@ export function PlaylistView({ playlistId }: { playlistId: string }) {
       <div className={`${isMobile ? "px-0" : "px-8"} pb-12 pt-2`}>
         {tracks.length ? (
           <div>
-            {tracks.map((track, i) => (
-              <div key={`${track.id}-${i}`}>
-                <PlaylistTrackRow track={track} index={i} queue={tracks} playlist={playlist} />
-                {i < tracks.length - 1 && <div className={`h-px bg-ink-hi/[0.05] ${isMobile ? "ml-[68px] mr-2" : "ml-[112px] mr-3"}`} />}
-              </div>
-            ))}
+            {(() => {
+              // The same track can appear twice in a playlist, so keys
+              // carry an occurrence number per id — stable across
+              // re-renders, unlike a raw index suffix.
+              const occurrence = new Map<string, number>();
+              return tracks.map((track, i) => {
+                const n = occurrence.get(track.id) ?? 0;
+                occurrence.set(track.id, n + 1);
+                const key = n === 0 ? track.id : `${track.id}#${n}`;
+                return (
+                  <div key={key} className="cv-row">
+                    <PlaylistTrackRow
+                      track={track}
+                      index={i}
+                      queue={tracks}
+                      playlist={playlist}
+                      placeholderColor={`rgb(${palette.wash})`}
+                    />
+                    {i < tracks.length - 1 && <div className={`h-px bg-ink-hi/[0.05] ${isMobile ? "ml-[68px] mr-2" : "ml-[112px] mr-3"}`} />}
+                  </div>
+                );
+              });
+            })()}
           </div>
         ) : (
           <EmptyState
@@ -295,11 +319,13 @@ function PlaylistTrackRow({
   index,
   queue,
   playlist,
+  placeholderColor,
 }: {
   track: Track;
   index: number;
   queue: Track[];
   playlist: Playlist;
+  placeholderColor?: string;
 }) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
@@ -349,7 +375,7 @@ function PlaylistTrackRow({
           </>
         )}
       </div>
-      <Artwork src={track.thumb} className={`${isMobile ? "w-[44px] h-[44px]" : "w-[52px] h-[52px]"} rounded-lg shrink-0`} iconClassName="w-4 h-4" alt="" />
+      <Artwork src={track.thumb} trackId={track.id} placeholderColor={placeholderColor} className={`${isMobile ? "w-[44px] h-[44px]" : "w-[52px] h-[52px]"} rounded-lg shrink-0`} iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0 pr-1">
         <div className="flex items-center gap-1.5 text-[15px] sm:text-[16px] font-semibold tracking-[-0.2px] text-ink-hi min-w-0">
           {track.explicit && <ExplicitBadge />}

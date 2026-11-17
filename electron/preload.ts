@@ -2,6 +2,9 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { DownloadProgress, Track } from "../src/types";
 
+/** Haptic feedback kinds the native shell can play (Android: ByTuneShell plugin). */
+export type HapticKind = "selection" | "light" | "medium" | "success";
+
 // The PiP window loads this same preload but its scope requests are rejected
 // by design (main-window-only handler) — an eager invoke there would leave an
 // unhandled rejection on every PiP open. The scope is captured lazily on the
@@ -22,7 +25,7 @@ const documentScope = (): Promise<string> => {
 const api = {
   platform: process.platform,
   versions: {
-    app: "1.0.1",
+    app: "1.1.0",
     electron: process.versions.electron ?? "",
     chrome: process.versions.chrome ?? "",
     node: process.versions.node ?? "",
@@ -200,6 +203,10 @@ const api = {
     ipcRenderer.on("download:progress", listener as never);
     return () => ipcRenderer.removeListener("download:progress", listener as never);
   },
+
+  // Haptics — the Android shell plugin plays these; the desktop main process
+  // has no handler, so this rejects on desktop and call sites must tolerate it.
+  haptic: (kind: HapticKind) => ipcRenderer.invoke("haptic", kind),
 };
 
 contextBridge.exposeInMainWorld("bytune", api);

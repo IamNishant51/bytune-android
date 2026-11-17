@@ -11,6 +11,8 @@
  *    Native (Notification / Lock screen / Bluetooth) -> window.__bytuneMediaAction -> usePlayer
  */
 import { usePlayer } from "../stores/player";
+import { useSettings } from "../stores/settings";
+import { upgradeArtwork } from "../lib/artwork";
 
 type PlayerStoreState = ReturnType<typeof usePlayer.getState>;
 
@@ -95,10 +97,11 @@ export function setupMobileMediaSession(): () => void {
         title: track.title || "Unknown Title",
         artist: track.artist || "Unknown Artist",
         album: track.album || "ByTune",
-        artworkUrl: track.thumb || "",
+        artworkUrl: upgradeArtwork(track.thumb, 512),
         duration: state.duration || 0,
         position: state.position || 0,
         isPlaying: state.playing,
+        playbackRate: useSettings.getState().playbackSpeed || 1,
       })
       .catch(() => {});
   };
@@ -108,11 +111,18 @@ export function setupMobileMediaSession(): () => void {
     syncState(state);
   });
 
+  // A speed change must reach the native session promptly, not on the next
+  // 2.5s position tick — the lock-screen scrubber otherwise drifts.
+  const unsubscribeSettings = useSettings.subscribe((s, prev) => {
+    if (s.playbackSpeed !== prev.playbackSpeed) syncState(usePlayer.getState(), true);
+  });
+
   // Initial sync.
   syncState(usePlayer.getState(), true);
 
   return () => {
     unsubscribe();
+    unsubscribeSettings();
     window.__bytuneMediaAction = undefined;
   };
 }

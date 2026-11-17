@@ -206,6 +206,12 @@ function collectBundles(profile: TasteProfile, ids: string[] | null): Map<string
 async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[]) => void): Promise<void> {
   pruneBundles();
 
+  // Market shelves are independent of the artist waves — start them now so
+  // a cache miss fetches concurrently with waves 1–3 instead of after them.
+  // The result is only painted when the feed wants it (below); otherwise the
+  // fetch still warms the market cache for the next rebuild.
+  const marketPromise = loadMarketShelves().catch(() => null);
+
   // Wave 1 — identity. Names the meta cache knows resolve for free.
   const topNames = profile.artists.slice(0, 6);
   await Promise.all(
@@ -239,7 +245,7 @@ async function orchestrate(profile: TasteProfile, apply: (sections: HomeSection[
 
   const feedThin = collectBundles(profile, [...seedIds, ...relatedIds]).size < 2;
   const wantYt = feedThin || profile.maturity === "cold" || profile.maturity === "light";
-  const marketShelves = wantYt ? await loadMarketShelves() : null;
+  const marketShelves = wantYt ? await marketPromise : null;
   apply(
     buildHomeSections({
       profile,

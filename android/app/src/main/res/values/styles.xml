@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- The app is a black canvas: no action bar, black system bars, light
-         icons on both. -->
+    <!-- The app is a black canvas: no action bar, transparent system bars
+         (edge-to-edge, enabled in MainActivity), light icons on both. The
+         CSS pads content for env(safe-area-inset-*). -->
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">#000000</item>
         <item name="colorAccent">@color/colorAccent</item>
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowBackground">#000000</item>
     </style>
@@ -18,8 +19,8 @@
         <item name="windowNoTitle">true</item>
         <item name="android:background">#000000</item>
         <item name="android:windowBackground">@drawable/splash_bg</item>
-        <item name="android:statusBarColor">#000000</item>
-        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 

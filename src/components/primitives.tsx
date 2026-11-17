@@ -8,6 +8,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertTriangle, ChevronLeft, ChevronRight, Music2, Play, type LucideIcon } from "lucide-react";
 import { extractPalette, type Palette } from "../lib/ambient";
 import { upgradeArtwork } from "../lib/artwork";
+import { getOfflineArtworkURL, isOfflineAvailable } from "../mobile/offline";
 import { useUI } from "../stores/ui";
 
 /* ============================================================ layout */
@@ -144,8 +145,23 @@ export function ShelfScroller({
 /**
  * Artwork with lazy loading and a graceful fallback — never a broken image,
  * never a layout shift.
+ *
+ * `loadedImages` remembers URLs that already decoded once (so a revisit
+ * renders eagerly instead of flashing the placeholder); it is bounded with
+ * eldest eviction like the other caches, never allowed to grow with the
+ * session.
  */
+const LOADED_IMAGES_CAP = 200;
 const loadedImages = new Set<string>();
+
+function noteImageLoaded(url: string): void {
+  if (loadedImages.has(url)) return;
+  if (loadedImages.size >= LOADED_IMAGES_CAP) {
+    const oldest = loadedImages.values().next().value;
+    if (oldest) loadedImages.delete(oldest);
+  }
+  loadedImages.add(url);
+}
 
 function inferArtworkTarget(cls: string, customSize?: number): number {
   if (customSize && customSize > 0) return Math.min(Math.max(customSize * 2, 80), 544);
@@ -164,6 +180,20 @@ function inferArtworkTarget(cls: string, customSize?: number): number {
 /**
  * Artwork with lazy loading and a graceful fallback — never a broken image,
  * never a layout shift.
+ *
+ * Loading: below-fold images are lazy (the old code forced every ≤160px
+ * thumb eager, so a long list fetched every cover up front); heroes and
+ * first rows stay eager via the `eager` prop, and already-decoded URLs
+ * render eagerly so revisits never flash the placeholder.
+ *
+ * Offline: when `trackId` is given, a cached cover (Track C's offline
+ * artwork store) wins over the remote URL, so downloaded tracks keep their
+ * covers with no network. The lookup is best-effort and async — the remote
+ * URL renders first, the cached cover swaps in when it resolves.
+ *
+ * Placeholder: `placeholderColor` (a computed palette colour from the
+ * page, when the caller has one) paints the slot while the image loads,
+ * instead of the neutral fill.
  */
 export function Artwork({
   src,
@@ -173,6 +203,8 @@ export function Artwork({
   rounded = "rounded-lg",
   size,
   eager,
+  trackId,
+  placeholderColor,
 }: {
   src?: string;
   alt?: string;
@@ -181,15 +213,44 @@ export function Artwork({
   rounded?: string;
   size?: number;
   eager?: boolean;
+  trackId?: string;
+  placeholderColor?: string;
 }) {
   const [failed, setFailed] = useState(false);
+  const [offlineSrc, setOfflineSrc] = useState<string | null>(null);
   const targetSize = inferArtworkTarget(className, size);
-  const displaySrc = upgradeArtwork(src, targetSize);
+  const remoteSrc = upgradeArtwork(src, targetSize);
+  const displaySrc = offlineSrc ?? remoteSrc;
   useEffect(() => setFailed(false), [displaySrc]);
+
+  useEffect(() => {
+    if (!trackId) {
+      setOfflineSrc(null);
+      return;
+    }
+    let cancelled = false;
+    void (async (): Promise<void> => {
+      try {
+        if (!(await isOfflineAvailable(trackId))) return;
+        const url = await getOfflineArtworkURL(trackId);
+        if (!cancelled && url) setOfflineSrc(url);
+      } catch {
+        /* Offline lookup is best-effort; the remote URL stays. */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [trackId]);
+
+  const placeholderStyle = placeholderColor ? { backgroundColor: placeholderColor } : undefined;
 
   if (!displaySrc || failed) {
     return (
-      <div className={`grid place-items-center bg-ink-hi/[0.04] art-hairline ${rounded} ${className}`}>
+      <div
+        style={placeholderStyle}
+        className={`grid place-items-center bg-ink-hi/[0.04] art-hairline ${rounded} ${className}`}
+      >
         <Music2 className={`${iconClassName} text-ink-ghost`} />
       </div>
     );
@@ -198,10 +259,11 @@ export function Artwork({
     <img
       src={displaySrc}
       alt={alt}
-      loading={eager || targetSize <= 160 || loadedImages.has(displaySrc) ? "eager" : "lazy"}
+      loading={eager || loadedImages.has(displaySrc) ? "eager" : "lazy"}
       decoding="async"
       draggable={false}
-      onLoad={() => loadedImages.add(displaySrc)}
+      style={placeholderStyle}
+      onLoad={() => noteImageLoaded(displaySrc)}
       onError={() => setFailed(true)}
       className={`object-cover bg-ink-hi/[0.04] art-hairline ${rounded} ${className}`}
     />
@@ -269,7 +331,9 @@ export function IconBtn({
   className?: string;
   size?: "sm" | "md";
 }) {
-  const dim = size === "sm" ? "p-1.5" : "p-2";
+  // Small targets get a 40px floor (was ~28px): touch targets must stay
+  // reachable on a phone even where the icon itself is small.
+  const dim = size === "sm" ? "min-h-10 min-w-10 grid place-items-center p-1.5" : "p-2";
   return (
     <button
       onClick={onClick}

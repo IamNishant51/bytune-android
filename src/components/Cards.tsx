@@ -23,7 +23,7 @@ function activateOnKey(open: () => void) {
    it. 8px inset keeps Spotify's proportion at this size; width grows to
    keep the cover at its tuned 168px. */
 const CARD =
-  "group w-[184px] shrink-0 text-left cursor-pointer active:scale-[0.96] rounded-2xl p-2 transition-all duration-150 hover:bg-white/[0.06]";
+  "group w-[184px] shrink-0 text-left cursor-pointer active:scale-[0.96] rounded-2xl p-2 transition-all duration-150 hover:bg-white/[0.06] cv-card";
 
 const CARD_TITLE = "text-[15px] font-semibold text-ink-hi truncate leading-snug";
 const CARD_SUB = "text-[13px] text-ink-dim truncate mt-0.5";
@@ -47,7 +47,7 @@ export function TrackCard({ track }: { track: Track }) {
       className={`${CARD} select-none ${drag.dragging ? "opacity-40" : ""}`}
     >
       <div className="relative overflow-hidden rounded-xl">
-        <Artwork src={track.thumb} className="w-full aspect-square rounded-xl transition-transform duration-300 ease-out origin-top group-hover:scale-[1.05]" iconClassName="w-7 h-7" />
+        <Artwork src={track.thumb} trackId={track.id} className="w-full aspect-square rounded-xl transition-transform duration-300 ease-out origin-top group-hover:scale-[1.05]" iconClassName="w-7 h-7" />
         <PlayOverlay onClick={() => playTrack(track)} />
       </div>
       <div className="mt-2.5">
@@ -143,16 +143,26 @@ export function PlaylistCardView({ playlist }: { playlist: PlaylistCard }) {
 
 /** Horizontal, scrollable music shelf. */
 export function HomeShelfView({ shelf }: { shelf: HomeShelf }) {
+  // Shelf items can repeat (the same track/album in two slots of a
+  // recommendation shelf), so keys carry an occurrence number per id —
+  // stable across re-renders, unlike a raw index suffix.
+  const occurrence = new Map<string, number>();
+  const itemKey = (kind: string, id: string): string => {
+    const base = `${kind}:${id}`;
+    const n = occurrence.get(base) ?? 0;
+    occurrence.set(base, n + 1);
+    return n === 0 ? base : `${base}#${n}`;
+  };
   return (
     <section className="animate-slide-up">
       <h2 className="section-title text-[21px] mb-4">{shelf.title}</h2>
       <ShelfScroller>
-        {shelf.items.map((item: HomeItem, i: number) => {
-          if (item.kind === "track" && item.track) return <TrackCard key={`${item.track.id}-${i}`} track={item.track} />;
-          if (item.kind === "album" && item.album) return <AlbumCard key={`${item.album.id}-${i}`} album={item.album} />;
-          if (item.kind === "artist" && item.artist) return <ArtistCard key={`${item.artist.id}-${i}`} artist={item.artist} />;
+        {shelf.items.map((item: HomeItem) => {
+          if (item.kind === "track" && item.track) return <TrackCard key={itemKey("track", item.track.id)} track={item.track} />;
+          if (item.kind === "album" && item.album) return <AlbumCard key={itemKey("album", item.album.id)} album={item.album} />;
+          if (item.kind === "artist" && item.artist) return <ArtistCard key={itemKey("artist", item.artist.id)} artist={item.artist} />;
           if (item.kind === "playlist" && item.playlist)
-            return <PlaylistCardView key={`${item.playlist.id}-${i}`} playlist={item.playlist} />;
+            return <PlaylistCardView key={itemKey("playlist", item.playlist.id)} playlist={item.playlist} />;
           return null;
         })}
       </ShelfScroller>

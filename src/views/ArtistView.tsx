@@ -13,6 +13,7 @@ import { useDrag } from "../lib/dnd";
 import { fmtTime } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
+import { mobileHeroArtworkTarget } from "../lib/device";
 import { useLibrary } from "../stores/library";
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
@@ -43,9 +44,10 @@ function SectionCard({ item }: { item: HomeItem }) {
   };
 
   return (
-    <button onClick={onOpen} className="group w-[172px] shrink-0 text-left cursor-pointer">
+    <button onClick={onOpen} className="cv-card group w-[172px] shrink-0 text-left cursor-pointer">
       <Artwork
         src={thumb}
+        trackId={item.track?.id}
         className={round ? "w-[172px] h-[172px] rounded-full" : "w-[172px] h-[172px] rounded-[10px]"}
         iconClassName="w-7 h-7"
         alt=""
@@ -56,7 +58,17 @@ function SectionCard({ item }: { item: HomeItem }) {
   );
 }
 
-function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: number }) {
+function SongRow({
+  song,
+  songs,
+  index,
+  placeholderColor,
+}: {
+  song: Track;
+  songs: Track[];
+  index: number;
+  placeholderColor?: string;
+}) {
   const playQueue = usePlayer((s) => s.playQueue);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const drag = useDrag({ track: song });
@@ -73,7 +85,7 @@ function SongRow({ song, songs, index }: { song: Track; songs: Track[]; index: n
       }}
       className={`group flex items-center gap-3.5 h-[64px] px-3 rounded-lg cursor-pointer select-none hover:bg-ink-hi/[0.05] ${drag.dragging ? "opacity-40" : ""}`}
     >
-      <Artwork src={song.thumb} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
+      <Artwork src={song.thumb} trackId={song.id} placeholderColor={placeholderColor} className="w-[52px] h-[52px] rounded-lg shrink-0" iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-[16px] font-semibold tracking-[-0.2px] text-ink-hi">
           {song.explicit && <ExplicitBadge />}
@@ -155,7 +167,8 @@ export function ArtistView({ artistId }: { artistId: string }) {
   const [nonce, setNonce] = useState(0);
   const playQueue = usePlayer((s) => s.playQueue);
 
-  useArtworkPalette(state?.artist.thumb ?? null);
+  // The palette is also the hero image's loading placeholder colour.
+  const palette = useArtworkPalette(state?.artist.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -239,7 +252,13 @@ export function ArtistView({ artistId }: { artistId: string }) {
       <div className={`relative ${isMobile ? "-mx-4" : "-mx-10"} overflow-hidden`}>
         <div className="absolute inset-0">
           {artist.thumb ? (
-            <img src={upgradeArtwork(artist.thumb, isMobile ? 720 : 1200)} alt="" className="w-full h-full object-cover" />
+            <img
+              src={upgradeArtwork(artist.thumb, isMobile ? mobileHeroArtworkTarget() : 1200)}
+              alt=""
+              decoding="async"
+              style={{ backgroundColor: `rgb(${palette.wash})` }}
+              className="w-full h-full object-cover"
+            />
           ) : (
             <div className="w-full h-full bg-ink-hi/[0.04]" />
           )}
@@ -318,12 +337,23 @@ export function ArtistView({ artistId }: { artistId: string }) {
           <section className="animate-fade-in">
             <h2 className="section-title text-[21px] mb-3">Top songs</h2>
             <div>
-              {top.map((song, i) => (
-                <div key={`${song.id}-${i}`}>
-                  <SongRow song={song} songs={top} index={i} />
-                  {i < top.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
-                </div>
-              ))}
+              {(() => {
+                // Top songs are unique by id in practice, but the same
+                // recording can appear twice; occurrence numbers keep keys
+                // stable without a raw index suffix.
+                const occurrence = new Map<string, number>();
+                return top.map((song, i) => {
+                  const n = occurrence.get(song.id) ?? 0;
+                  occurrence.set(song.id, n + 1);
+                  const key = n === 0 ? song.id : `${song.id}#${n}`;
+                  return (
+                    <div key={key} className="cv-row">
+                      <SongRow song={song} songs={top} index={i} placeholderColor={`rgb(${palette.wash})`} />
+                      {i < top.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[80px] mr-3" />}
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </section>
         )}
@@ -332,9 +362,19 @@ export function ArtistView({ artistId }: { artistId: string }) {
           <section key={shelf.title} className="animate-fade-in">
             <h2 className="section-title text-[21px] mb-3">{shelf.title}</h2>
             <ShelfScroller arrowTop="top-[68px]">
-              {shelf.items.map((item, i) => (
-                <SectionCard key={`${shelf.title}-${i}`} item={item} />
-              ))}
+              {(() => {
+                // Shelf slots can repeat an item; keys carry an occurrence
+                // number per kind+id instead of a raw index suffix.
+                const occurrence = new Map<string, number>();
+                return shelf.items.map((item) => {
+                  const id =
+                    item.track?.id ?? item.album?.id ?? item.artist?.id ?? item.playlist?.id ?? item.kind;
+                  const base = `${item.kind}:${id}`;
+                  const n = occurrence.get(base) ?? 0;
+                  occurrence.set(base, n + 1);
+                  return <SectionCard key={n === 0 ? base : `${base}#${n}`} item={item} />;
+                });
+              })()}
             </ShelfScroller>
           </section>
         ))}

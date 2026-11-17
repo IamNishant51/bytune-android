@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { ContextMenu } from "./components/ContextMenu";
 import { MobileActionSheet } from "./mobile/MobileActionSheet";
 import { Dialog } from "./components/primitives";
@@ -6,11 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { prefetchLyrics, LyricsCenter } from "./components/LyricsCenter";
 import { NowPlaying } from "./components/NowPlaying";
 import { Onboarding } from "./views/OnboardingView";
-import { PlayerBar } from "./components/PlayerBar";
-import { RightRail } from "./components/RightRail";
-import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
-import { TopBar } from "./components/TopBar";
 import { MobileNav, MobilePlayerBar, MobileSearchField, MobileTopBar } from "./mobile/MobileShell";
 import { engineBoot } from "./lib/audio";
 import { useIsMobile } from "./lib/useIsMobile";
@@ -28,17 +24,33 @@ import { usePlayer } from "./stores/player";
 import { useLibrary } from "./stores/library";
 import { useSettings } from "./stores/settings";
 import { useUI } from "./stores/ui";
-import { AlbumView } from "./views/AlbumView";
-import { ArtistView } from "./views/ArtistView";
-import { DownloadsView } from "./views/DownloadsView";
-import { ExploreView } from "./views/ExploreView";
-import { HomeView } from "./views/HomeView";
-import { RemotePlaylistView } from "./views/RemotePlaylistView";
-import { LibraryView } from "./views/LibraryView";import { LocalMusicView } from "./views/LocalMusicView";
-import { PlaylistView } from "./views/PlaylistView";
-import { ReplayView } from "./views/ReplayView";
-import { SearchView } from "./views/SearchView";
-import { SettingsView } from "./views/SettingsView";
+import { isLowMemoryDevice } from "./lib/device";
+import { storage } from "./lib/persist";
+
+// Code-split views + desktop shell: the first paint only needs the mobile
+// chrome and the onboarding gate; each view and the desktop-only shell load
+// on demand. All of these are named exports, hence the default wrappers.
+// NowPlaying lazily imports PlayerBar/QueuePanel too — the same chunk.
+// Kept eager: Onboarding (session gate), NowPlaying, LyricsCenter,
+// ContextMenu, MobileActionSheet, Dialog, Toasts.
+const PlayerBar = lazy(() => import("./components/PlayerBar").then((m) => ({ default: m.PlayerBar })));
+const RightRail = lazy(() => import("./components/RightRail").then((m) => ({ default: m.RightRail })));
+const Sidebar = lazy(() => import("./components/Sidebar").then((m) => ({ default: m.Sidebar })));
+const TopBar = lazy(() => import("./components/TopBar").then((m) => ({ default: m.TopBar })));
+const AlbumView = lazy(() => import("./views/AlbumView").then((m) => ({ default: m.AlbumView })));
+const ArtistView = lazy(() => import("./views/ArtistView").then((m) => ({ default: m.ArtistView })));
+const DownloadsView = lazy(() => import("./views/DownloadsView").then((m) => ({ default: m.DownloadsView })));
+const ExploreView = lazy(() => import("./views/ExploreView").then((m) => ({ default: m.ExploreView })));
+const HomeView = lazy(() => import("./views/HomeView").then((m) => ({ default: m.HomeView })));
+const RemotePlaylistView = lazy(() =>
+  import("./views/RemotePlaylistView").then((m) => ({ default: m.RemotePlaylistView }))
+);
+const LibraryView = lazy(() => import("./views/LibraryView").then((m) => ({ default: m.LibraryView })));
+const LocalMusicView = lazy(() => import("./views/LocalMusicView").then((m) => ({ default: m.LocalMusicView })));
+const PlaylistView = lazy(() => import("./views/PlaylistView").then((m) => ({ default: m.PlaylistView })));
+const ReplayView = lazy(() => import("./views/ReplayView").then((m) => ({ default: m.ReplayView })));
+const SearchView = lazy(() => import("./views/SearchView").then((m) => ({ default: m.SearchView })));
+const SettingsView = lazy(() => import("./views/SettingsView").then((m) => ({ default: m.SettingsView })));
 
 /**
  * The middle panel's artwork wash — the morphing gradient at the top of the
@@ -264,6 +276,33 @@ function useAppearance(): void {
   }, [reduceAnimation, reduceDynamicBlur, liquidGlass]);
 }
 
+/**
+ * Low-memory first-run defaults: on a <=4 GB device with no persisted
+ * settings yet, the reduce-blur treatment starts ON and unfocused-lyrics
+ * blur starts OFF (backdrop-filter over scrolling lyrics is the heaviest
+ * single effect on a 4 GB phone). A stored settings blob — i.e. any prior
+ * run, including an explicit user choice — is never overwritten: the
+ * setters below are also guarded to the current default values, so a user
+ * who already flipped a toggle keeps their choice.
+ */
+function useLowMemoryDefaults(): void {
+  useEffect(() => {
+    if (!isLowMemoryDevice()) return;
+    let cancelled = false;
+    // StateStorage.getItem may return synchronously or as a promise;
+    // Promise.resolve normalises both.
+    void Promise.resolve(storage.getItem("settings")).then((raw: string | null) => {
+      if (cancelled || raw !== null) return;
+      const st = useSettings.getState();
+      if (st.reduceDynamicBlur === false) st.setReduceDynamicBlur(true);
+      if (st.blurUnfocusedLyrics === true) st.setBlurUnfocusedLyrics(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+}
+
 function CurrentView(): ReactNode {
   const view = useUI((s) => s.view);
   switch (view.name) {
@@ -392,6 +431,7 @@ export default function App() {
   useAndroidBackButton();
   useAmbient();
   useAppearance();
+  useLowMemoryDefaults();
   useTouchLongPress();
 
   // First run / reinstall gate — no shell is rendered until a mode is chosen.
@@ -412,12 +452,24 @@ export default function App() {
       {/* One shell, two arrangements. A phone (or a narrow window) gets a slim
           top bar, the content at full width, a compact player bar and a bottom
           tab bar; the three-pane desktop layout is unchanged above 860px. */}
-      {isMobile ? <MobileTopBar /> : <TopBar />}
+      {/* Suspense fallbacks stay null: the shell and views load from local
+          chunks, so a spinner would only flash. */}
+      {isMobile ? (
+        <MobileTopBar />
+      ) : (
+        <Suspense fallback={null}>
+          <TopBar />
+        </Suspense>
+      )}
       {isMobile && viewName === "search" && <MobileSearchField />}
       {/* Three-pane shell: sidebar · content · right rail, over a black canvas.
           8px gaps and side padding; 4px strip above the play bar (Spotify). */}
       <div className={`flex flex-1 min-h-0 ${isMobile ? "flex-col p-0" : "gap-2 px-2 pb-1"}`}>
-        {!isMobile && <Sidebar />}
+        {!isMobile && (
+          <Suspense fallback={null}>
+            <Sidebar />
+          </Suspense>
+        )}
         <main
           className={`flex-1 min-w-0 flex flex-col ${isMobile ? "rounded-none bg-canvas" : "bg-surface rounded-2xl"} overflow-hidden relative`}
           {...panelDrop.props}
@@ -431,7 +483,10 @@ export default function App() {
               panelDrop.hovering ? "opacity-100" : "opacity-0"
             }`}
           />
-          <TintWash />
+          {/* TintWash is display:none on mobile (see index.css) but its
+              palette hook still ran a full extraction per track — gate the
+              whole component on desktop so the work never starts. */}
+          {!isMobile && <TintWash />}
           {lyricsCenter ? (
             <LyricsCenter />
           ) : (
@@ -446,7 +501,9 @@ export default function App() {
                   className={`animate-rise-in ${isMobile ? (hasTrack ? "px-4 pt-3 pb-36" : "px-4 pt-3 pb-24") : "px-10 pt-5 pb-6"}`}
                 >
                   <ErrorBoundary>
-                    <CurrentView />
+                    <Suspense fallback={null}>
+                      <CurrentView />
+                    </Suspense>
                   </ErrorBoundary>
                 </div>
               </div>
@@ -466,7 +523,11 @@ export default function App() {
               </>
           )}
         </main>
-        {!isMobile && <RightRail />}
+        {!isMobile && (
+          <Suspense fallback={null}>
+            <RightRail />
+          </Suspense>
+        )}
       </div>
       {isMobile ? (
         <div className="mobile-chrome-dock">
@@ -476,7 +537,9 @@ export default function App() {
           </div>
         </div>
       ) : (
-        <PlayerBar />
+        <Suspense fallback={null}>
+          <PlayerBar />
+        </Suspense>
       )}
       <NowPlaying />
       <Dialog />

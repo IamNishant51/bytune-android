@@ -15,6 +15,7 @@ import { useDrag } from "../lib/dnd";
 import { fmtTime } from "../lib/format";
 import { useArtworkPalette } from "../lib/palette";
 import { upgradeArtwork } from "../lib/artwork";
+import { mobileHeroArtworkTarget } from "../lib/device";
 import { queueAlbum } from "../lib/album";
 import { usePlayer } from "../stores/player";
 import { useUI } from "../stores/ui";
@@ -38,8 +39,9 @@ export function AlbumView({ albumId }: { albumId: string }) {
 
   // The whole page wears the artwork's colour: page-tint paints the host with
   // the per-page ArtworkPalette CSS variables, then the hero gradients read
-  // from the same wash + accent.
-  useArtworkPalette(data?.album.thumb ?? null);
+  // from the same wash + accent. The palette is also the hero image's
+  // loading placeholder colour.
+  const palette = useArtworkPalette(data?.album.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,7 +111,13 @@ export function AlbumView({ albumId }: { albumId: string }) {
       <div className="relative -mx-10 overflow-hidden">
         <div className="absolute inset-0">
           {album.thumb ? (
-            <img src={upgradeArtwork(album.thumb, isMobile ? 720 : 1200)} alt="" className="w-full h-full object-cover" />
+            <img
+              src={upgradeArtwork(album.thumb, isMobile ? mobileHeroArtworkTarget() : 1200)}
+              alt=""
+              decoding="async"
+              style={{ backgroundColor: `rgb(${palette.wash})` }}
+              className="w-full h-full object-cover"
+            />
           ) : (
             <div className="w-full h-full bg-ink-hi/[0.04] grid place-items-center">
               <Disc3 className="w-12 h-12 text-ink-hi/30" />
@@ -251,12 +259,23 @@ export function AlbumView({ albumId }: { albumId: string }) {
 
         <section>
           <div>
-            {tracks.map((song, i) => (
-              <div key={`${song.id}-${i}`}>
-                <AlbumTrackRow song={song} index={i} tracks={tracks} />
-                {i < tracks.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[112px] mr-3" />}
-              </div>
-            ))}
+            {(() => {
+              // Album tracks are unique by id in practice, but the same
+              // recording can appear twice (deluxe editions); occurrence
+              // numbers keep keys stable without a raw index suffix.
+              const occurrence = new Map<string, number>();
+              return tracks.map((song, i) => {
+                const n = occurrence.get(song.id) ?? 0;
+                occurrence.set(song.id, n + 1);
+                const key = n === 0 ? song.id : `${song.id}#${n}`;
+                return (
+                  <div key={key} className="cv-row">
+                    <AlbumTrackRow song={song} index={i} tracks={tracks} />
+                    {i < tracks.length - 1 && <div className="h-px bg-ink-hi/[0.05] ml-[112px] mr-3" />}
+                  </div>
+                );
+              });
+            })()}
           </div>
         </section>
       </div>

@@ -88,6 +88,11 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
 
   return (
     <div className="h-[75vh] flex flex-col">
+      {/* Grabber: the sheet's drag handle (MobileSheet tracks drags that
+          start on [data-sheet-grabber]). */}
+      <div className="shrink-0 pt-2.5 pb-1 flex justify-center" data-sheet-grabber>
+        <span className="block h-1 w-10 rounded-full bg-white/20" aria-hidden />
+      </div>
       {/* Header with tabs and close */}
       <div className="h-14 shrink-0 flex items-center justify-between px-5 border-b border-white/[0.08]">
         <div className="flex items-center gap-5 h-full">
@@ -124,7 +129,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
           <button
             onClick={onClose}
             aria-label="Close queue"
-            className="p-1.5 -mr-1 rounded-full text-white/55 hover:text-white active:scale-95 transition-all"
+            className="min-h-10 min-w-10 grid place-items-center -mr-1 rounded-full text-white/55 hover:text-white active:scale-95 transition-all"
           >
             <ChevronDown className="w-5 h-5" />
           </button>
@@ -150,7 +155,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
             <div className="flex items-center gap-3 h-14 px-3 rounded-lg bg-white/[0.12] shrink-0 mb-3">
               <span className="w-10 h-10 shrink-0 rounded-md overflow-hidden bg-white/10">
                 {current.thumb ? (
-                  <img src={upgradeArtwork(current.thumb)} alt="" className="w-full h-full object-cover" />
+                  <img src={upgradeArtwork(current.thumb, 160)} alt="" decoding="async" className="w-full h-full object-cover" />
                 ) : (
                   <Music2 className="w-5 h-5 m-auto text-white/40" />
                 )}
@@ -175,7 +180,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
                 onClick={toggleShuffle}
                 title={shuffle ? "Disable shuffle" : "Enable shuffle"}
                 aria-pressed={shuffle}
-                className={`p-1.5 rounded-full transition-all active:scale-90 ${
+                className={`min-h-10 min-w-10 grid place-items-center rounded-full transition-all active:scale-90 ${
                   shuffle ? "text-primary bg-primary/15" : "text-white/45 hover:text-white"
                 }`}
               >
@@ -185,7 +190,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
                 onClick={cycleRepeat}
                 title={repeat === "off" ? "Repeat all" : repeat === "all" ? "Repeat one" : "Repeat off"}
                 aria-pressed={repeat !== "off"}
-                className={`p-1.5 rounded-full transition-all active:scale-90 ${
+                className={`min-h-10 min-w-10 grid place-items-center rounded-full transition-all active:scale-90 ${
                   repeat !== "off" ? "text-primary bg-primary/15" : "text-white/45 hover:text-white"
                 }`}
               >
@@ -195,7 +200,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
                 onClick={() => setAutoplay(!autoplay)}
                 title={autoplay ? "Autoplay is on (endless music)" : "Turn on autoplay (endless music)"}
                 aria-pressed={autoplay}
-                className={`p-1.5 rounded-full transition-all active:scale-90 ${
+                className={`min-h-10 min-w-10 grid place-items-center rounded-full transition-all active:scale-90 ${
                   autoplay ? "text-primary bg-primary/15" : "text-white/45 hover:text-white"
                 }`}
               >
@@ -224,7 +229,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
                 return (
                   <div
                     key={stableKey(t.id)}
-                    className={`flex items-center gap-3 h-12 px-2.5 rounded-lg select-none transition-colors cursor-pointer ${
+                    className={`cv-row flex items-center gap-3 h-12 px-2.5 rounded-lg select-none transition-colors cursor-pointer ${
                       isDraggingThis ? "bg-white/[0.16] shadow-md" : "bg-white/[0.04] hover:bg-white/[0.08]"
                     }`}
                     onClick={() => {
@@ -234,7 +239,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
                   >
                     <span className="w-9 h-9 shrink-0 rounded-md overflow-hidden bg-white/5">
                       {t.thumb ? (
-                        <img src={upgradeArtwork(t.thumb)} alt="" className="w-full h-full object-cover" />
+                        <img src={upgradeArtwork(t.thumb, 160)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                       ) : (
                         <Music2 className="w-4 h-4 m-auto text-white/30" />
                       )}
@@ -256,7 +261,7 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
                       }}
                       title="Remove from queue"
                       aria-label="Remove from queue"
-                      className="p-1.5 shrink-0 rounded text-white/45 hover:text-red-400 active:text-red-400 transition-colors"
+                      className="min-h-10 min-w-10 grid place-items-center shrink-0 rounded text-white/45 hover:text-red-400 active:text-red-400 transition-colors"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -294,15 +299,15 @@ export function MobileQueue({ onClose }: { onClose?: () => void }) {
               Nothing here yet — tracks you play land in Recently played.
             </div>
           ) : (
-            history.slice(0, 50).map((t, i) => (
+            history.slice(0, 50).map((t) => (
               <div
-                key={`${t.id}-${i}`}
+                key={stableKey(t.id)}
                 onClick={() => playTrack(t)}
-                className="flex items-center gap-3 h-12 px-2.5 rounded-lg select-none transition-colors cursor-pointer bg-white/[0.04] hover:bg-white/[0.08]"
+                className="cv-row flex items-center gap-3 h-12 px-2.5 rounded-lg select-none transition-colors cursor-pointer bg-white/[0.04] hover:bg-white/[0.08]"
               >
                 <span className="w-9 h-9 shrink-0 rounded-md overflow-hidden bg-white/5">
                   {t.thumb ? (
-                    <img src={upgradeArtwork(t.thumb)} alt="" className="w-full h-full object-cover" />
+                    <img src={upgradeArtwork(t.thumb, 160)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                   ) : (
                     <Music2 className="w-4 h-4 m-auto text-white/30" />
                   )}

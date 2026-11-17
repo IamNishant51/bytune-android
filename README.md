@@ -16,15 +16,19 @@ Download the APK from [Releases](https://github.com/IamNishant51/bytune-android/
 and open it on the phone (allow "install unknown apps" for the file manager), or:
 
 ```bash
-adb install -r ByTune-1.0.3.apk
+adb install -r ByTune-1.1.0.apk
 ```
 
 | | |
 |---|---|
 | Package | `com.bytune.music` |
-| Version | `1.0.3` (versionCode `4`) |
+| Version | `1.1.0` (versionCode `5`) |
 | Android | 5.1+ (minSdk 22), targetSdk 34 |
 | Signing | stable keystore — later builds upgrade in place, data intact |
+
+> 1.1.0 has no published APK yet — the GitHub release is a draft until a signed build
+> exists. Build it via CI (see [`docs/android/CI-RELEASE.md`](docs/android/CI-RELEASE.md))
+> or locally with `npm run apk`.
 
 ## Features
 
@@ -97,14 +101,16 @@ Without it the release build is unsigned. After editing `src/mobile/potoken-page
 | [`RESPONSIVE.md`](docs/android/RESPONSIVE.md) | Breakpoints and the device matrix |
 | [`TESTING.md`](docs/android/TESTING.md) | Emulator, `adb` and CDP verification protocol |
 | [`BUILD.md`](docs/android/BUILD.md) · [`DECISIONS.md`](docs/android/DECISIONS.md) · [`ARCHITECTURE.md`](docs/android/ARCHITECTURE.md) | Toolchain, ADRs, internal structure |
+| [`CI-RELEASE.md`](docs/android/CI-RELEASE.md) | Signed release APKs via GitHub Actions (secrets setup, triggers) |
 
 ## Known limitations
 
 - Glass blur needs a GPU-composited `backdrop-filter`. On the Android emulator's
   SwiftShader WebView the surfaces render as tint + rim with sharp content behind them;
   a real device renders the blur.
-- PiP is desktop-only and hidden on Android. Accounts/cloud sync are not implemented;
-  the app is guest-only.
+- PiP is desktop-only and hidden on Android. Google sign-in is implemented (Supabase PKCE +
+  deep link); cloud sync is not implemented — sync/backup UI is hidden on Android and
+  library data stays local (see D18).
 
 ## License
 

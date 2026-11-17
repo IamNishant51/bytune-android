@@ -250,8 +250,9 @@ export function PlayerBar() {
             {track?.thumb ? (
               <img
                 key={track.id}
-                src={upgradeArtwork(track.thumb)}
+                src={upgradeArtwork(track.thumb, 160)}
                 alt=""
+                decoding="async"
                 className="h-full w-full object-cover"
               />
             ) : (

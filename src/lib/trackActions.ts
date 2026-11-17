@@ -27,6 +27,7 @@ import { isAndroid } from "./platform";
 import { PLAYLIST_SORTS, type PlaylistSort } from "./playlistSort";
 import { playSource } from "./recs/playback";
 import { fmtTime } from "./format";
+import { getCurrentRendition } from "./audio";
 import type { Track } from "../types";
 
 export function trackMenuItems(track: Track): MenuItem[] {
@@ -197,9 +198,15 @@ export function trackMenuItems(track: Track): MenuItem[] {
     label: "View credits",
     icon: Info,
     action: () => {
+      // Only the track actually playing has a known rendition — for any
+      // other track the codec line is omitted rather than guessed.
+      const rendition = track.id === usePlayer.getState().current()?.id ? getCurrentRendition() : null;
+      const label = rendition
+        ? [rendition.codec ?? "", rendition.bitrateKbps ? `${rendition.bitrateKbps} kbps` : ""].join(" ").trim()
+        : "";
       useUI.getState().openDialog({
         title: "Song Credits",
-        body: `• Track: ${track.title}\n• Artist: ${track.artist}\n• Album: ${track.album || "Single"}\n• Duration: ${fmtTime(track.duration)}\n• Audio Engine: Opus 256kbps 48kHz Stereo (High-Fidelity)`,
+        body: `• Track: ${track.title}\n• Artist: ${track.artist}\n• Album: ${track.album || "Single"}\n• Duration: ${fmtTime(track.duration)}${label ? `\n• Audio: ${label}` : ""}`,
         confirmLabel: "Done",
         onConfirm: () => {},
       });

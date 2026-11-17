@@ -26,11 +26,13 @@ function PlaylistTrackRow({
   index,
   numbered,
   queue,
+  placeholderColor,
 }: {
   song: Track;
   index: number;
   numbered: boolean;
   queue: Track[];
+  placeholderColor?: string;
 }) {
   const isMobile = useIsMobile();
   const playQueue = usePlayer((s) => s.playQueue);
@@ -72,7 +74,7 @@ function PlaylistTrackRow({
           </button>
         </div>
       ) : null}
-      <Artwork src={song.thumb} className={`${isMobile ? "w-[44px] h-[44px]" : "w-[52px] h-[52px]"} rounded-lg shrink-0`} iconClassName="w-4 h-4" alt="" />
+      <Artwork src={song.thumb} trackId={song.id} placeholderColor={placeholderColor} className={`${isMobile ? "w-[44px] h-[44px]" : "w-[52px] h-[52px]"} rounded-lg shrink-0`} iconClassName="w-4 h-4" alt="" />
       <div className="flex-1 min-w-0 pr-1">
         <div className="flex items-center gap-1.5 text-[15px] sm:text-[16px] font-semibold tracking-[-0.2px] text-ink-hi min-w-0">
           {song.explicit && <ExplicitBadge />}
@@ -126,7 +128,8 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
     [page?.tracks, sort, sortDesc]
   );
 
-  useArtworkPalette(page?.thumb ?? null);
+  // The palette is also the hero image's loading placeholder colour.
+  const palette = useArtworkPalette(page?.thumb ?? null);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,7 +186,13 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
       <div className={`relative ${isMobile ? "-mx-4" : "-mx-10"} overflow-hidden`}>
         <div className="absolute inset-0">
           {page.thumb ? (
-            <img src={upgradeArtwork(page.thumb, 1200)} alt="" className="w-full h-full object-cover" />
+            <img
+              src={upgradeArtwork(page.thumb, 1200)}
+              alt=""
+              decoding="async"
+              style={{ backgroundColor: `rgb(${palette.wash})` }}
+              className="w-full h-full object-cover"
+            />
           ) : (
             <div className="w-full h-full bg-ink-hi/[0.04] grid place-items-center">
               <ListMusic className="w-12 h-12 text-ink-hi/30" />
@@ -321,12 +330,23 @@ export function RemotePlaylistView({ playlistId }: { playlistId: string }) {
       <div className={`${isMobile ? "px-0" : "px-8"} pb-12 pt-2`}>
         {tracks.length ? (
           <div>
-            {tracks.map((song, i) => (
-              <div key={`${song.id}-${i}`}>
-                <PlaylistTrackRow song={song} index={i} numbered queue={tracks} />
-                {i < tracks.length - 1 && <div className={`h-px bg-ink-hi/[0.05] ${isMobile ? "ml-[68px] mr-2" : "ml-[112px] mr-3"}`} />}
-              </div>
-            ))}
+            {(() => {
+              // The same track can appear twice in a playlist, so keys
+              // carry an occurrence number per id — stable across
+              // re-renders, unlike a raw index suffix.
+              const occurrence = new Map<string, number>();
+              return tracks.map((song, i) => {
+                const n = occurrence.get(song.id) ?? 0;
+                occurrence.set(song.id, n + 1);
+                const key = n === 0 ? song.id : `${song.id}#${n}`;
+                return (
+                  <div key={key} className="cv-row">
+                    <PlaylistTrackRow song={song} index={i} numbered queue={tracks} placeholderColor={`rgb(${palette.wash})`} />
+                    {i < tracks.length - 1 && <div className={`h-px bg-ink-hi/[0.05] ${isMobile ? "ml-[68px] mr-2" : "ml-[112px] mr-3"}`} />}
+                  </div>
+                );
+              });
+            })()}
           </div>
         ) : (
           <div className="text-[13px] text-ink-dim py-10 text-center">This playlist is empty.</div>

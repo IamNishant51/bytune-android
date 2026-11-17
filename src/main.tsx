@@ -1,11 +1,14 @@
 import "./mobile/bootstrap";
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { PipApp } from "./pip/PipApp";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./lib/platform";
 import "./index.css";
+
+// The PiP miniplayer loads only in the PiP window — the main app never pays
+// for its chunk.
+const PipApp = lazy(() => import("./pip/PipApp").then((m) => ({ default: m.PipApp })));
 
 /**
  * One bundle, two windows: the main app shell, and — when this renderer was
@@ -18,7 +21,9 @@ const isPipWindow = new URLSearchParams(window.location.search).get("window") ==
 ReactDOM.createRoot(document.getElementById("root")!).render(
   isPipWindow ? (
     <ErrorBoundary>
-      <PipApp />
+      <Suspense fallback={null}>
+        <PipApp />
+      </Suspense>
     </ErrorBoundary>
   ) : (
     <React.StrictMode>

@@ -40,10 +40,21 @@ function SheetRow({ item, onClose }: { item: MenuItem; onClose: () => void }) {
 /** Renders one flat slot; a `children` item expands in place (a hover flyout
  *  has no anchor on a sheet). */
 function renderRows(items: MenuItem[], openSub: number | null, setOpenSub: (n: number | null) => void, onClose: () => void): ReactNode[] {
+  // Labels can repeat (the same action in different groups), so keys carry
+  // an occurrence number per label instead of a raw index suffix.
+  const occurrence = new Map<string, number>();
+  const rowKey = (label: string | undefined): string => {
+    // Separators carry no label; they share the "item" base and the
+    // occurrence number still keeps every key unique.
+    const base = label ?? "item";
+    const n = occurrence.get(base) ?? 0;
+    occurrence.set(base, n + 1);
+    return n === 0 ? base : `${base}#${n}`;
+  };
   return items.map((item, i) => {
     if (item.header) {
       return (
-        <Fragment key={`h-${i}`}>
+        <Fragment key={`h-${rowKey(item.label)}`}>
           {item.separatorBefore && <div className="my-1.5 h-px bg-white/[0.07]" />}
           <div className="px-4 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-white/45">
             {item.label}
@@ -54,7 +65,7 @@ function renderRows(items: MenuItem[], openSub: number | null, setOpenSub: (n: n
     const hasSub = !!item.children && item.children.length > 0;
     const subOpen = hasSub && openSub === i;
     return (
-      <Fragment key={`${item.label}-${i}`}>
+      <Fragment key={rowKey(item.label)}>
         {item.separatorBefore && <div className="my-1.5 h-px bg-white/[0.07]" />}
         {hasSub ? (
           <>
@@ -72,7 +83,9 @@ function renderRows(items: MenuItem[], openSub: number | null, setOpenSub: (n: n
             {subOpen && (
               <div className="pl-4 bg-white/[0.04]">
                 {item.children!.map((child, ci) => (
-                  <SheetRow key={`${item.label}-${ci}`} item={child} onClose={onClose} />
+                  // Child labels can repeat (two playlists with one name),
+                  // so the index suffix stays, scoped by the parent label.
+                  <SheetRow key={`${item.label}/${child.label}-${ci}`} item={child} onClose={onClose} />
                 ))}
               </div>
             )}
@@ -95,8 +108,8 @@ export function MobileActionSheet() {
   if (!menu) return null;
 
   return (
-    <MobileSheet onClose={close}>
-      <div className="pt-2.5 pb-1 flex justify-center">
+    <MobileSheet onClose={close} label="Actions">
+      <div className="pt-2.5 pb-1 flex justify-center" data-sheet-grabber>
         <span className="block h-1 w-10 rounded-full bg-white/20" aria-hidden />
       </div>
       <div className="p-1.5 pb-4" role="menu" aria-label="Actions">

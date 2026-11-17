@@ -15,7 +15,9 @@ import { usePlayer } from "../stores/player";
 import { useRecents } from "../stores/recents";
 import { useUI } from "../stores/ui";
 import { upgradeArtwork } from "../lib/artwork";
+import { haptic } from "../lib/haptics";
 import { useSession } from "../lib/session";
+import { ConnectivityBanner } from "./ConnectivityBanner";
 
 const TABS = [
   { view: "home", label: "Home", Icon: Home },
@@ -41,11 +43,9 @@ export function MobileNav() {
 
   const handleTabPress = (name: string) => {
     const now = Date.now();
+    haptic("selection");
     if (name === "search") {
       if (view.name === "search" || now - lastSearchTapRef.current < 380) {
-        if (typeof navigator !== "undefined" && navigator.vibrate) {
-          navigator.vibrate(10);
-        }
         window.dispatchEvent(new CustomEvent("bytune:focus-search"));
       }
       lastSearchTapRef.current = now;
@@ -56,7 +56,9 @@ export function MobileNav() {
   const activeIdx = TABS.findIndex((t) => active(t.view));
 
   return (
-    <nav className="mobile-nav" aria-label="Main navigation">
+    <>
+      <ConnectivityBanner />
+      <nav className="mobile-nav" aria-label="Main navigation">
       {/* Dynamic sliding liquid glass tab indicator */}
       {activeIdx >= 0 && (
         <div
@@ -71,9 +73,11 @@ export function MobileNav() {
       {TABS.map(({ view: name, label, Icon }) => {
         const on = active(name);
         return (
+          // ONE handler per tab: the old pointerdown+click pair fired
+          // handleTabPress twice per tap, so a single Search tap always
+          // looked like a double-tap and opened the keyboard.
           <button
             key={name}
-            onPointerDown={() => handleTabPress(name)}
             onClick={() => handleTabPress(name)}
             className={`mobile-tab ${on ? "is-active" : ""}`}
             aria-current={on ? "page" : undefined}
@@ -84,6 +88,7 @@ export function MobileNav() {
         );
       })}
     </nav>
+    </>
   );
 }
 
@@ -133,9 +138,38 @@ export function MobilePlayerBar() {
     }, 50);
   };
 
-  if (!track) return null;
-
+  // Smooth progress: the store's position ticks at timeupdate rate (~4Hz),
+  // which stepped the bar. A rAF loop interpolates between ticks by writing
+  // the width straight to the span (no React re-render per frame), anchored
+  // to the latest tick; pausing parks the bar on the last tick exactly.
+  const progressRef = useRef<HTMLSpanElement | null>(null);
+  const progressAnchor = useRef({ pos: 0, at: 0 });
+  const trackId = track?.id ?? null;
+  useEffect(() => {
+    progressAnchor.current = { pos: position, at: performance.now() };
+  }, [position, trackId]);
   const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
+  useEffect(() => {
+    const el = progressRef.current;
+    if (!el) return;
+    if (!playing || duration <= 0) {
+      el.style.width = `${pct}%`;
+      return;
+    }
+    let raf = 0;
+    const tick = (): void => {
+      const p = Math.min(
+        duration,
+        progressAnchor.current.pos + (performance.now() - progressAnchor.current.at) / 1000
+      );
+      el.style.width = `${(p / duration) * 100}%`;
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [playing, duration, pct]);
+
+  if (!track) return null;
 
   return (
     <div
@@ -162,13 +196,13 @@ export function MobilePlayerBar() {
       }}
     >
       <div className="mobile-player-progress" aria-hidden>
-        <span style={{ width: `${pct}%` }} />
+        <span ref={progressRef} style={{ width: `${pct}%` }} />
       </div>
       <div className="mobile-player-row">
         <div className="mobile-player-meta">
           {track.thumb ? (
             <span key={`art-${track.id}`} className="mobile-player-art art-hairline animate-art-in">
-              <img src={upgradeArtwork(track.thumb, 128)} alt="" />
+              <img src={upgradeArtwork(track.thumb, 128)} alt="" decoding="async" />
             </span>
           ) : null}
           <span key={`meta-${track.id}`} className="min-w-0 text-left animate-meta-in">
@@ -181,7 +215,10 @@ export function MobilePlayerBar() {
             <SkipBack className="h-4 w-4" fill="currentColor" strokeWidth={0} />
           </button>
           <button
-            onClick={() => toggle()}
+            onClick={() => {
+              toggle();
+              haptic("light");
+            }}
             className="mobile-player-play"
             aria-label={playing ? "Pause" : "Play"}
           >
@@ -405,34 +442,47 @@ export function MobileSearchField() {
                 </span>
               </button>
 
-              {suggests.map((s, i) => (
-                <div
-                  key={`${s.text}-${i}`}
-                  className="w-full flex items-center justify-between gap-2 px-3 h-12 rounded-xl active:bg-white/[0.08] transition-colors cursor-pointer"
-                  onClick={() => {
-                    setText(s.text);
-                    run(s.text);
-                  }}
-                >
-                  <div className="flex items-center gap-3.5 min-w-0 flex-1">
-                    <Search className="w-4 h-4 text-ink-dim shrink-0" />
-                    <span className="min-w-0 flex-1 text-[15px] text-ink-hi truncate">{s.text}</span>
-                  </div>
-                  <button
-                    type="button"
-                    title="Insert search term"
-                    aria-label={`Insert ${s.text} into search`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setText(s.text);
-                      inputRef.current?.focus();
-                    }}
-                    className="p-2 text-ink-dim hover:text-ink-hi active:scale-90 transition-transform"
-                  >
-                    <ArrowUpLeft className="w-4 h-4" />
-                  </button>
-                </div>
-              ))}
+              {(() => {
+                // Suggestion texts can repeat (same text, different kinds),
+                // so keys carry an occurrence number per text.
+                const occurrence = new Map<string, number>();
+                return suggests.map((s) => {
+                  const n = occurrence.get(s.text) ?? 0;
+                  occurrence.set(s.text, n + 1);
+                  const key = n === 0 ? s.text : `${s.text}#${n}`;
+                  return (
+                    <div
+                      key={key}
+                      className="w-full flex items-center justify-between gap-2 px-3 h-12 rounded-xl transition-colors"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setText(s.text);
+                          run(s.text);
+                        }}
+                        className="flex items-center gap-3.5 min-w-0 flex-1 h-full text-left rounded-xl active:bg-white/[0.08] transition-colors"
+                      >
+                        <Search className="w-4 h-4 text-ink-dim shrink-0" />
+                        <span className="min-w-0 flex-1 text-[15px] text-ink-hi truncate">{s.text}</span>
+                      </button>
+                      <button
+                        type="button"
+                        title="Insert search term"
+                        aria-label={`Insert ${s.text} into search`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setText(s.text);
+                          inputRef.current?.focus();
+                        }}
+                        className="p-2 text-ink-dim hover:text-ink-hi active:scale-90 transition-transform"
+                      >
+                        <ArrowUpLeft className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           ) : (
             <div>
@@ -450,16 +500,19 @@ export function MobileSearchField() {
                   {recents.map((q) => (
                     <div
                       key={q}
-                      className="w-full flex items-center justify-between gap-2 px-3 h-12 rounded-xl active:bg-white/[0.08] transition-colors cursor-pointer"
-                      onClick={() => {
-                        setText(q);
-                        run(q);
-                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 h-12 rounded-xl transition-colors"
                     >
-                      <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setText(q);
+                          run(q);
+                        }}
+                        className="flex items-center gap-3.5 min-w-0 flex-1 h-full text-left rounded-xl active:bg-white/[0.08] transition-colors"
+                      >
                         <History className="w-4 h-4 text-ink-dim shrink-0" />
                         <span className="min-w-0 flex-1 text-[15px] text-ink-hi truncate">{q}</span>
-                      </div>
+                      </button>
                       <button
                         type="button"
                         title="Remove"
@@ -490,23 +543,83 @@ export function MobileSearchField() {
 
 /** Queue / details rail as a bottom sheet (the desktop shows it as a column).
  *  Dismissal animates out before the parent unmounts us — the close callback
- *  fires 200ms late on purpose, once the sheet is off screen. */
-export function MobileSheet({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
+ *  fires 200ms late on purpose, once the sheet is off screen.
+ *
+ *  Drag-to-dismiss reuses the NowPlaying touch-tracking + velocity pattern:
+ *  a drag that starts on the grabber ([data-sheet-grabber] in the content)
+ *  follows the finger, dismisses past 80px (or 25px with velocity > 0.4),
+ *  and springs back otherwise. Content scrolling is untouched — only
+ *  grabber touches ever start a drag. */
+export function MobileSheet({
+  children,
+  onClose,
+  label = "Panel",
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+  label?: string;
+}) {
   const [closing, setClosing] = useState(false);
   const done = useRef(false);
+  const closeTimer = useRef<number | null>(null);
   const close = () => {
     if (done.current) return;
     done.current = true;
     setClosing(true);
-    window.setTimeout(onClose, 200);
+    closeTimer.current = window.setTimeout(onClose, 200);
   };
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    },
+    []
+  );
+
+  const [dragY, setDragY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const touchStartY = useRef(0);
+  const touchStartTime = useRef(0);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (!target?.closest("[data-sheet-grabber]")) return;
+    touchStartY.current = e.touches[0].clientY;
+    touchStartTime.current = Date.now();
+    setIsDragging(true);
+  };
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDragging) return;
+    const deltaY = e.touches[0].clientY - touchStartY.current;
+    setDragY(Math.max(0, deltaY));
+  };
+  const handleTouchEnd = () => {
+    if (!isDragging) return;
+    setIsDragging(false);
+    const elapsed = Date.now() - touchStartTime.current;
+    const velocity = dragY / (elapsed || 1);
+    if (dragY > 80 || (dragY > 25 && velocity > 0.4)) {
+      haptic("light");
+      close();
+      return;
+    }
+    setDragY(0);
+  };
+
   return (
     <div className={`mobile-sheet-backdrop ${closing ? "is-closing" : ""}`} onClick={close} role="presentation">
       <div
-        className={`mobile-sheet ${closing ? "is-closing" : ""}`}
+        className={`mobile-sheet ${closing ? "is-closing" : ""} ${isDragging ? "is-dragging" : ""}`}
         onClick={(e) => e.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        style={{
+          transform: dragY > 0 ? `translateY(${dragY}px)` : undefined,
+          transition: isDragging ? "none" : "transform 240ms cubic-bezier(0.2, 0.9, 0.3, 1)",
+        }}
         role="dialog"
-        aria-label="Panel"
+        aria-modal="true"
+        aria-label={label}
       >
         {children}
       </div>

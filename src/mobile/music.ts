@@ -12,6 +12,7 @@ import {
   callSearch,
   callSearchContinuation,
   collectRenderers,
+  collectRenderersMulti,
   parseArtistPage,
   parseBrowseItem,
   parseChartsShelves,
@@ -85,6 +86,24 @@ async function mintPoToken(visitorData: string, gl: string, hl: string): Promise
   }
 }
 
+/**
+ * Defensively cancel a mint the JS race gave up on. The native method is a
+ * Track D contract (`cancelPoToken`); until it lands the call is a no-op
+ * here and the Kotlin timeout is the backstop — either way, silence.
+ */
+async function cancelPoTokenMint(): Promise<void> {
+  try {
+    const shell = (
+      globalThis as unknown as {
+        Capacitor?: { Plugins?: { ByTuneShell?: { cancelPoToken?: () => Promise<unknown> } } };
+      }
+    ).Capacitor?.Plugins?.ByTuneShell;
+    await shell?.cancelPoToken?.();
+  } catch {
+    /* missing method or a mint that already finished — nothing to do */
+  }
+}
+
 export function getSession(): Promise<Session> {
   if (!sessionPromise) {
     sessionPromise = (async () => {
@@ -92,12 +111,31 @@ export function getSession(): Promise<Session> {
       const hl = displayLanguage();
       // Visitor data first: the PO token is bound to it.
       const base = await openSession(gl, hl, null);
-      // Bounded PO-token minting (3.5s timeout) so slow initial botguard challenge doesn't stall audio playback
-      const poToken = await Promise.race([
-        mintPoToken(base.visitorData, gl, hl),
-        new Promise<null>((r) => setTimeout(() => r(null), 3500)),
-      ]);
+      // Bounded PO-token minting (3.5s timeout) so slow initial botguard challenge doesn't stall audio playback.
+      const mint = mintPoToken(base.visitorData, gl, hl);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 3500);
+      });
+      const poToken = await Promise.race([mint, timeout]);
+      if (timer !== undefined) clearTimeout(timer);
       session = { ...base, poToken };
+      if (!poToken) {
+        // The race gave up, but the mint may still land: cancel it natively
+        // if the shell supports it, and adopt a late token into the LIVE
+        // session object (shims close over this same object) if it arrives
+        // anyway — dropping every stream resolved without a token so the
+        // next resolution carries it.
+        void cancelPoTokenMint();
+        void mint
+          .then((late) => {
+            if (late && session && !session.poToken) {
+              session.poToken = late;
+              invalidateStreamCache();
+            }
+          })
+          .catch(() => undefined);
+      }
       return session;
     })().catch((err) => {
       sessionPromise = null;
@@ -287,10 +325,11 @@ function runsText(node: any): string {
 /** Raw home shelves → the `HomeShelf[]` the renderer's feed engine consumes. */
 function parseHomeShelves(res: any): HomeShelf[] {
   const shelves: HomeShelf[] = [];
-  const carousels = [
-    ...collectRenderers(res, "musicCarouselShelfRenderer"),
-    ...collectRenderers(res, "musicShelfRenderer"),
-  ];
+  // One walk buckets both shelf kinds; one walk per shelf buckets both item
+  // kinds — the old code walked the whole tree twice up front and then once
+  // per kind per shelf.
+  const shelfBuckets = collectRenderersMulti(res, ["musicCarouselShelfRenderer", "musicShelfRenderer"]);
+  const carousels = [...shelfBuckets["musicCarouselShelfRenderer"], ...shelfBuckets["musicShelfRenderer"]];
   for (const shelf of carousels) {
     const title =
       runsText(shelf?.header?.musicCarouselShelfBasicHeaderRenderer?.title) ||
@@ -298,7 +337,8 @@ function parseHomeShelves(res: any): HomeShelf[] {
       runsText(shelf?.title?.musicCarouselShelfBasicHeaderRenderer?.title) ||
       "For you";
     const items: HomeItem[] = [];
-    for (const row of collectRenderers(shelf, "musicResponsiveListItemRenderer")) {
+    const itemBuckets = collectRenderersMulti(shelf, ["musicResponsiveListItemRenderer", "musicTwoRowItemRenderer"]);
+    for (const row of itemBuckets["musicResponsiveListItemRenderer"]) {
       const track = parseResponsiveListItem(row);
       if (track) {
         items.push({ kind: "track", track });
@@ -316,7 +356,7 @@ function parseHomeShelves(res: any): HomeShelf[] {
       if (items.length >= 24) break;
     }
     if (items.length < 24) {
-      for (const card of collectRenderers(shelf, "musicTwoRowItemRenderer")) {
+      for (const card of itemBuckets["musicTwoRowItemRenderer"]) {
         const parsed = parseTwoRowItem(card);
         if (parsed?.item) {
           items.push(parsed.item);
@@ -346,24 +386,131 @@ export async function marketInfo(): Promise<{ country: string; source: string }>
 /* Streams + durations                                                 */
 /* ------------------------------------------------------------------ */
 
-const durationCache = new Map<string, number>();
-const streamCache = new Map<string, { stream: ResolvedStream; ts: number }>();
-const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+/** What a resolved stream actually is — the honest rendition facts. */
+export interface StreamRendition {
+  codec: string | null;
+  bitrateKbps: number | null;
+  mime: string;
+  client: string;
+}
 
-export async function resolveStream(videoId: string, maxKbps?: number): Promise<ResolvedStream> {
-  const cached = streamCache.get(videoId);
-  if (cached && Date.now() - cached.ts < STREAM_CACHE_TTL_MS) {
-    return cached.stream;
+/** Last resolved rendition per video id (bounded like the stream cache). */
+const renditionById = new Map<string, StreamRendition>();
+const RENDITION_CACHE_MAX = 20;
+
+function rememberRendition(videoId: string, stream: ResolvedStream): void {
+  renditionById.delete(videoId);
+  renditionById.set(videoId, {
+    codec: stream.codec,
+    bitrateKbps: stream.bitrateKbps,
+    mime: stream.mime,
+    client: stream.client,
+  });
+  while (renditionById.size > RENDITION_CACHE_MAX) {
+    const first = renditionById.keys().next().value;
+    if (first === undefined) break;
+    renditionById.delete(first);
+  }
+}
+
+/** Rendition of the most recent resolution for this id, if any. */
+export function getResolvedRendition(videoId: string): StreamRendition | null {
+  return renditionById.get(videoId) ?? null;
+}
+
+const durationCache = new Map<string, number>();
+const DURATION_CACHE_MAX = 200;
+
+function rememberDuration(id: string, secs: number): void {
+  durationCache.delete(id);
+  durationCache.set(id, secs);
+  while (durationCache.size > DURATION_CACHE_MAX) {
+    const first = durationCache.keys().next().value;
+    if (first === undefined) break;
+    durationCache.delete(first);
+  }
+}
+
+/** Drop all cached durations (memory-pressure hook). */
+export function clearDurationCache(): void {
+  durationCache.clear();
+}
+
+interface StreamCacheEntry {
+  stream: ResolvedStream;
+  resolvedAt: number;
+  /** min(response expiry, cache TTL) — the hard bound on reuse. */
+  expiresAt: number;
+}
+
+const streamCache = new Map<string, StreamCacheEntry>();
+const STREAM_CACHE_MAX = 20;
+const STREAM_CACHE_TTL_MS = 10 * 60 * 1000;
+/** Treat a URL as expired this far before its real expiry (clock skew + the
+ *  time a track still has left to play). */
+const EXPIRY_SAFETY_MS = 60 * 1000;
+
+/** The cache key carries the quality ceiling: changing quality must return
+ *  a different rendition, not the one resolved under the old ceiling. */
+function streamCacheKey(videoId: string, maxKbps?: number): string {
+  return `${videoId}:${maxKbps ?? "full"}`;
+}
+
+function streamEntryExpired(entry: StreamCacheEntry): boolean {
+  return Date.now() + EXPIRY_SAFETY_MS >= entry.expiresAt;
+}
+
+/**
+ * Drop cached streams — all of them, or every quality variant of one track.
+ * The retry path (forceRotate), PO-token adoption, network recovery and the
+ * memory-pressure hook all funnel through here.
+ */
+export function invalidateStreamCache(videoId?: string): void {
+  if (videoId === undefined) {
+    streamCache.clear();
+    renditionById.clear();
+    return;
+  }
+  const prefix = `${videoId}:`;
+  for (const key of [...streamCache.keys()]) {
+    if (key.startsWith(prefix)) streamCache.delete(key);
+  }
+  renditionById.delete(videoId);
+}
+
+export async function resolveStream(videoId: string, maxKbps?: number, forceRefresh = false): Promise<ResolvedStream> {
+  const key = streamCacheKey(videoId, maxKbps);
+  if (forceRefresh) {
+    streamCache.delete(key);
+  } else {
+    const cached = streamCache.get(key);
+    if (cached) {
+      if (!streamEntryExpired(cached)) {
+        // Refresh LRU order on a hit.
+        streamCache.delete(key);
+        streamCache.set(key, cached);
+        return cached.stream;
+      }
+      streamCache.delete(key);
+    }
   }
   const s = await getSession();
   const stream = await resolveStreamWith(videoId, s, maxKbps);
-  streamCache.set(videoId, { stream, ts: Date.now() });
+  const expiresAt = Math.min(stream.expiresAt ?? Infinity, stream.resolvedAt + STREAM_CACHE_TTL_MS);
+  streamCache.delete(key);
+  streamCache.set(key, { stream, resolvedAt: stream.resolvedAt, expiresAt });
+  while (streamCache.size > STREAM_CACHE_MAX) {
+    const first = streamCache.keys().next().value;
+    if (first === undefined) break;
+    streamCache.delete(first);
+  }
+  rememberRendition(videoId, stream);
   return stream;
 }
 
 export async function enrichDurations(ids: string[]): Promise<Record<string, number>> {
   const out: Record<string, number> = {};
-  const pending = [...new Set(ids.filter((id) => id && !durationCache.has(id)))].slice(0, 24);
+  const pending = [...new Set(ids.filter((id) => id && !durationCache.has(id)))].slice(0, 16);
   const s = await getSession();
   let cursor = 0;
   const worker = async (): Promise<void> => {
@@ -371,7 +518,7 @@ export async function enrichDurations(ids: string[]): Promise<Record<string, num
       const id = pending[cursor++];
       const secs = await videoDuration(id, s).catch(() => 0);
       if (secs > 0) {
-        durationCache.set(id, secs);
+        rememberDuration(id, secs);
         out[id] = secs;
       }
     }

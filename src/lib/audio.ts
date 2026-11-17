@@ -48,6 +48,8 @@ import { emitPlayEvent } from "./playEvents";
 import { analyseTrackHead, detectEdgeSilence } from "./analysis";
 import { upgradeArtwork } from "./artwork";
 import { createMediaKeyTap } from "./media-key-tap";
+import { useConnectivity } from "./connectivity";
+import { getResolvedRendition, type StreamRendition } from "../mobile/music";
 import {
   deviceChoices,
   outputChangeAction,
@@ -70,6 +72,57 @@ let localMissingToasted = false;
 let historyForId: string | null = null;
 /** track id the engine itself is advancing to via crossfade — suppresses reload */
 let advancingToId: string | null = null;
+/** rendition of the track currently loaded (codec + bitrate of the resolved stream, if known) */
+let currentRendition: StreamRendition | null = null;
+/** blob URL of the offline track on the decks, if any — revoked once superseded */
+let activeBlobUrl: string | null = null;
+/** track id whose successor has already been prefetch-resolved this play */
+let prefetchedNextFor: string | null = null;
+/** the engine parked on a network failure, waiting for connectivity to return */
+let waitingForConnection = false;
+let waitingWasPlaying = false;
+
+/** The rendition actually playing, for honest display (credits dialog). Null
+ *  when unknown, offline, or local — callers omit the codec line then. */
+export function getCurrentRendition(): StreamRendition | null {
+  return currentRendition;
+}
+
+/**
+ * Track the URL just assigned to a deck. A superseded blob URL is revoked
+ * after a delay: the outgoing deck may still be audible through a crossfade
+ * (up to 12s), and revoking mid-playback can starve it. One outstanding
+ * revocation per track change keeps the leak bounded.
+ */
+function trackPlaybackUrl(url: string): void {
+  const prev = activeBlobUrl;
+  activeBlobUrl = url.startsWith("blob:") ? url : null;
+  if (prev && prev !== url) scheduleBlobRevoke(prev);
+}
+
+function scheduleBlobRevoke(url: string): void {
+  window.setTimeout(() => {
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* already revoked */
+    }
+  }, 15000);
+}
+
+/** Release the standby deck's src (memory-pressure hook) — never mid-blend,
+ *  when the standby deck is the track the listener is hearing. */
+export function releaseStandbyAudio(): void {
+  if (!elements || transitioning()) return;
+  const stand = standbyEl();
+  try {
+    stand.pause();
+    stand.removeAttribute("src");
+    stand.load();
+  } catch {
+    /* ignore */
+  }
+}
 
 const MAX_SKIPS = 5;
 
@@ -227,10 +280,56 @@ async function fetchLoudness(proxyUrl: string, trackId: string): Promise<void> {
 function prefetchLoudness(track: Track | null): void {
   if (!track || track.localPath || track.id.startsWith("local:")) return;
   if (loudnessGains.has(track.id)) return;
+  // Downloaded tracks play from IndexedDB — resolving them here would mint
+  // an orphan blob URL nobody plays.
+  if (useLibrary.getState().downloads[track.id]?.status === "done") return;
   void (async () => {
     const url = await requireBridge().getStreamUrl(track.id, false, useSettings.getState().streamingQuality);
     if (url) await fetchLoudness(url, track.id);
   })().catch(() => undefined);
+}
+
+/**
+ * Next-track prefetch: resolve the NEXT queue track's stream into the
+ * stream cache as soon as the current track starts playing, regardless of
+ * the crossfade setting. Cache only — the standby element's src is never
+ * set here, so no audio bytes are fetched twice.
+ */
+function prefetchNextStream(): void {
+  const state = usePlayer.getState();
+  const cur = state.queue[state.index];
+  if (!cur || prefetchedNextFor === cur.id) return;
+  if (state.shuffle || state.repeat === "one") return;
+  if (state.index >= state.queue.length - 1) return;
+  const nextTrack = state.queue[state.index + 1];
+  if (!nextTrack || nextTrack.localPath || nextTrack.id.startsWith("local:")) return;
+  if (useLibrary.getState().downloads[nextTrack.id]?.status === "done") return;
+  prefetchedNextFor = cur.id;
+  void requireBridge()
+    .getStreamUrl(nextTrack.id, false, useSettings.getState().streamingQuality)
+    .catch(() => undefined);
+}
+
+/** Last id passed to touchOfflinePlayed: the `playing` event re-fires on
+ * resume and after buffering stalls, but LRU recency only needs one touch
+ * per track start. */
+let lastTouchedOfflineId = "";
+
+/**
+ * LRU recency (Track C contract): record a play start so storage-cap
+ * eviction ranks downloads by real recency instead of download date.
+ * No-op for tracks with no offline record (touchOfflinePlayed checks the
+ * meta store first) and fully best-effort. Lazily imported: the offline
+ * engine is only needed once playback actually starts.
+ */
+function touchOfflinePlayedForCurrent(): void {
+  const state = usePlayer.getState();
+  const cur = state.queue[state.index];
+  if (!cur || lastTouchedOfflineId === cur.id) return;
+  lastTouchedOfflineId = cur.id;
+  void import("../mobile/offline")
+    .then((m) => m.touchOfflinePlayed(cur.id))
+    .catch(() => undefined);
 }
 
 /**
@@ -537,6 +636,7 @@ async function beginFade(nextTrack: Track, fadeMs: number): Promise<void> {
     const plan = planFadeStart(nextTrack.id, fadeMs);
     const startAt = performance.now() + plan.delayMs;
     stand.src = url;
+    trackPlaybackUrl(url);
     stand.currentTime = 0;
     applySpeed();
     const state = usePlayer.getState();
@@ -669,6 +769,9 @@ function completeTransition(reason: "blend-complete" | "outgoing-ended" | "incom
     mainIdx = mainIdx === 0 ? 1 : 0;
     loadedId = f.toId;
     historyForId = f.toId;
+    // The promoted deck's src decides: a blob URL means offline playback,
+    // whose bytes did not come from this resolution — no rendition to claim.
+    currentRendition = el().src.startsWith("blob:") ? null : getResolvedRendition(f.toId);
     try {
       oldMain.pause();
       oldMain.removeAttribute("src");
@@ -703,6 +806,11 @@ function completeTransition(reason: "blend-complete" | "outgoing-ended" | "incom
     settling = false;
     transitionToken += 1;
   }
+  // The promoted deck's `playing` event fired while it was still the
+  // standby, so the playing handler never saw this track start — prefetch
+  // its successor and record the play start here instead.
+  prefetchNextStream();
+  touchOfflinePlayedForCurrent();
   // A deck promoted after it already ran out would stall the queue: its
   // `ended` fired while it was still the standby and nothing re-arms it. Hand
   // straight to the normal end path so playback keeps moving.
@@ -825,6 +933,7 @@ function requestSilenceAnalysis(track: Track): void {
   const isLocal = !!track.localPath || track.id.startsWith("local:");
   silenceAnalysing.add(track.id);
   void (async () => {
+    let fetchedUrl: string | null = null;
     try {
       const bridge = requireBridge();
       // Local files decode through the same proxy route the element plays.
@@ -832,6 +941,7 @@ function requestSilenceAnalysis(track: Track): void {
         ? await bridge.localTrackUrl(track.id)
         : await bridge.getStreamUrl(track.id, false, useSettings.getState().streamingQuality);
       if (!url) return;
+      fetchedUrl = url;
       const res = await fetch(url);
       if (!res.ok || !res.body) return;
       const buf = await res.arrayBuffer();
@@ -854,6 +964,16 @@ function requestSilenceAnalysis(track: Track): void {
     } catch {
       /* analysis is best-effort */
     } finally {
+      // The analysis fetch mints its own blob URL for offline tracks (each
+      // getStreamUrl call creates a fresh one) — revoke it now that the
+      // bytes are in memory; the deck's URL is a different object URL.
+      if (fetchedUrl && fetchedUrl.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(fetchedUrl);
+        } catch {
+          /* already revoked */
+        }
+      }
       silenceAnalysing.delete(track.id);
     }
   })();
@@ -895,6 +1015,8 @@ export function initAudioEngine(): void {
       usePlayer.getState()._setBuffering(false);
       consecutiveFailures = 0;
       localMissingToasted = false;
+      prefetchNextStream();
+      touchOfflinePlayedForCurrent();
       const cur = usePlayer.getState().queue[usePlayer.getState().index];
       if (cur && historyForId !== cur.id) {
         historyForId = cur.id;
@@ -1042,6 +1164,7 @@ export function initAudioEngine(): void {
 
   setupMediaSession();
   setupAudioOutputWatch();
+  setupConnectivityRecovery();
 }
 
 function onTrackEnded(): void {
@@ -1124,6 +1247,95 @@ async function autoplayNext(): Promise<void> {
   }
 }
 
+/* ============================ network recovery ============================ */
+
+/** Best-known position for a track, clamped inside its duration. */
+function savedPosition(track: Track): number {
+  const state = usePlayer.getState();
+  const pos = Math.max(state.position, 0);
+  const elDur = elements ? el().duration : NaN;
+  const dur = Number.isFinite(elDur) && elDur > 0 ? elDur : track.duration || 0;
+  return dur > 0 ? Math.min(pos, Math.max(dur - 1, 0)) : pos;
+}
+
+/** True when the failure looks like the network going away rather than a
+ *  bad track: offline now, or a transport-flavoured error message. An
+ *  element error code alone is ambiguous (a 403 can surface as a network
+ *  error), so it is deliberately not consulted here — those failures take
+ *  the force-rotate retry path instead. */
+function looksLikeNetworkFailure(err: unknown): boolean {
+  if (typeof navigator !== "undefined" && !navigator.onLine) return true;
+  const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /network|fetch failed|failed to fetch|timed out|timeout|offline|ECONN|ENOTFOUND|ERR_NETWORK|ERR_INTERNET_DISCONNECTED/i.test(
+    msg
+  );
+}
+
+/**
+ * Network-switch recovery: going offline pauses in place (never skips);
+ * coming back online re-resolves the parked track with a busted stream
+ * cache and resumes at the saved position, only if the engine parked it.
+ */
+function setupConnectivityRecovery(): void {
+  useConnectivity.subscribe((state, prev) => {
+    if (state.online === prev.online) return;
+    if (!state.online) {
+      const s = usePlayer.getState();
+      const cur = s.queue[s.index] ?? null;
+      if (!cur || !s.playing) return;
+      waitingForConnection = true;
+      waitingWasPlaying = true;
+      pendingSeek = savedPosition(cur);
+      loadedId = null;
+      usePlayer.setState({
+        playing: false,
+        position: pendingSeek,
+        error: "Waiting for connection — playback will resume when you're back online.",
+      });
+      return;
+    }
+    if (!waitingForConnection) return;
+    waitingForConnection = false;
+    const s = usePlayer.getState();
+    const cur = s.queue[s.index] ?? null;
+    if (!cur) return;
+    const resume = waitingWasPlaying;
+    waitingWasPlaying = false;
+    pendingSeek = s.position;
+    retryCount = 0;
+    usePlayer.setState({ error: null });
+    void loadUrl(cur, resume, true);
+  });
+}
+
+/**
+ * Seek once the element can honour it. Setting currentTime before metadata
+ * loads throws and the seek is silently lost, so the immediate attempt is
+ * backed by a one-shot loadedmetadata listener that re-applies the seek
+ * only if the element is still far from it and still on this track.
+ */
+function applyPendingSeek(a: HTMLAudioElement, track: Track, seekTo: number): void {
+  if (seekTo <= 0) return;
+  try {
+    a.currentTime = seekTo;
+  } catch {
+    /* metadata not ready — the listener below retries */
+  }
+  a.addEventListener(
+    "loadedmetadata",
+    () => {
+      try {
+        if (loadedId === track.id && Math.abs(a.currentTime - seekTo) > 0.5) {
+          a.currentTime = seekTo;
+        }
+      } catch {
+        /* ignore */
+      }
+    },
+    { once: true }
+  );
+}
+
 /** Called once after persisted state has been rehydrated. */
 export function engineBoot(): void {
   initAudioEngine();
@@ -1138,9 +1350,15 @@ async function loadTrack(track: Track | null, autoplay: boolean): Promise<void> 
   // A fresh load is a new playback session: any arming still waiting on a
   // start belongs to the previous track and must not fire.
   transitionToken += 1;
+  waitingForConnection = false;
+  waitingWasPlaying = false;
+  prefetchedNextFor = null;
+  currentRendition = null;
   if (!track) {
     loadedId = null;
     historyForId = null;
+    if (activeBlobUrl) scheduleBlobRevoke(activeBlobUrl);
+    activeBlobUrl = null;
     el().pause();
     el().removeAttribute("src");
     el().load();
@@ -1187,15 +1405,12 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
       // would otherwise never get a volume write).
       refreshVolumes();
       a.src = src;
+      trackPlaybackUrl(src);
       loadedId = track.id;
-      if (pendingSeek > 0) {
-        try {
-          a.currentTime = pendingSeek;
-        } catch {
-          /* ignore */
-        }
-        pendingSeek = 0;
-      }
+      currentRendition = null;
+      const localSeek = pendingSeek;
+      pendingSeek = 0;
+      applyPendingSeek(a, track, localSeek);
       applySpeed();
       updateMediaSession(track);
       if (autoplay || usePlayer.getState().playing) {
@@ -1208,24 +1423,25 @@ async function loadUrl(track: Track, autoplay: boolean, forceRotate: boolean): P
     const url = await requireBridge().getStreamUrl(track.id, forceRotate, useSettings.getState().streamingQuality);
     const cur = usePlayer.getState().queue[usePlayer.getState().index];
     if (cur?.id !== track.id) return; // user moved on while we were resolving
+    // The rendition of the stream just resolved (null for offline blobs,
+    // whose bytes came from storage, not this resolution).
+    currentRendition = url.startsWith("blob:") ? null : getResolvedRendition(track.id);
     // Loudness metadata races the element's own first request: both share the
     // proxy's single in-flight resolution, so the measured gain lands with the
     // first audio chunk while the fallback gain covers the moment before.
     void fetchLoudness(url, track.id);
     const a = el();
     a.src = url;
+    trackPlaybackUrl(url);
     // Start at this track's own gain (cached or fallback) instead of the
     // previous track's — fetchLoudness refines it once metadata lands.
     refreshVolumes();
     loadedId = track.id;
     const trim = silenceTrims.get(track.id);
-    if (pendingSeek > 0) {
-      try {
-        a.currentTime = pendingSeek;
-      } catch {
-        /* ignore */
-      }
-      pendingSeek = 0;
+    const seekTo = pendingSeek;
+    pendingSeek = 0;
+    if (seekTo > 0) {
+      applyPendingSeek(a, track, seekTo);
     } else if (trim && trim.head > 0.05) {
       try {
         a.currentTime = trim.head;
@@ -1258,8 +1474,30 @@ function handleFailure(track: Track, err?: unknown): void {
   // spot for play() promises aborted by an immediate pause). The next play
   // re-attempts the load from the top.
   if (!state.playing) return;
+  // Network failure: never auto-skip. Park on this track with a retry
+  // affordance — the player error state tells the user what happened, the
+  // 'online' handler resumes automatically, and tapping play re-resolves
+  // (loadedId is cleared so the dead src is not replayed).
+  if (looksLikeNetworkFailure(err)) {
+    waitingForConnection = true;
+    waitingWasPlaying = true;
+    retryCount = 0;
+    pendingSeek = savedPosition(track);
+    loadedId = null;
+    usePlayer.setState({
+      playing: false,
+      position: pendingSeek,
+      error: "Waiting for connection — playback will resume when you're back online.",
+    });
+    useUI.getState().toast("Connection lost — playback paused. It will resume when you're back online.", "warning");
+    return;
+  }
   if (retryCount < 1) {
     retryCount += 1;
+    // Expired stream URLs fail here: forceRotate busts the stream cache so
+    // the retry resolves a fresh URL, the saved position restores, and the
+    // previous playing state resumes — the track is not skipped.
+    pendingSeek = savedPosition(track);
     void loadUrl(track, true, true);
     return;
   }
@@ -1310,7 +1548,7 @@ function updateMediaSession(track: Track | null): void {
       artist: track.artist,
       album: track.album || "ByTune",
       artwork: [96, 192, 512].map((size) => ({
-        src: upgradeArtwork(track.thumb),
+        src: upgradeArtwork(track.thumb, size),
         sizes: `${size}x${size}`,
         type: "image/jpeg",
       })),

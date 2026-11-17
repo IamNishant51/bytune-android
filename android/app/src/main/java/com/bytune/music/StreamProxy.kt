@@ -9,7 +9,8 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * Loopback media proxy — the phone's copy of `electron/stream-proxy.ts`.
@@ -32,7 +33,24 @@ object StreamProxy {
 
     private data class Entry(val url: String, val lufs: Double?)
 
-    private val entries = ConcurrentHashMap<String, Entry>()
+    // Bounded LRU: only the last few resolved tracks are ever played back, and
+    // upstream URLs expire, so keeping every registration for the process
+    // lifetime is pure growth. Access-ordered; eldest evicted on register.
+    // LinkedHashMap is not thread-safe and get() mutates access order, so
+    // every access synchronizes on the map itself.
+    private const val MAX_ENTRIES = 8
+    private val entries = object : LinkedHashMap<String, Entry>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Entry>?): Boolean {
+            return size > MAX_ENTRIES
+        }
+    }
+
+    // Fixed pool: a seek storm must not spawn unbounded threads (each relay
+    // holds a 64 KB buffer). Queued requests wait; connections still close.
+    private val pool: ExecutorService = Executors.newFixedThreadPool(4) { work ->
+        Thread(work, "bytune-stream").apply { isDaemon = true }
+    }
+
     private var server: ServerSocket? = null
 
     @Volatile
@@ -50,7 +68,7 @@ object StreamProxy {
             while (!socket.isClosed) {
                 try {
                     val client = socket.accept()
-                    Thread({ serve(client) }, "bytune-stream").start()
+                    pool.execute { serve(client) }
                 } catch (err: IOException) {
                     if (!socket.isClosed) Log.w(TAG, "accept failed", err)
                 }
@@ -66,7 +84,7 @@ object StreamProxy {
      */
     fun register(key: String, url: String, lufs: Double?): String {
         val p = ensureStarted()
-        entries[key] = Entry(url, lufs)
+        synchronized(entries) { entries[key] = Entry(url, lufs) }
         return "http://127.0.0.1:$p/s/$key?v=1"
     }
 
@@ -100,7 +118,7 @@ object StreamProxy {
                     out.flush()
                     return
                 }
-                val entry = entries[path.removePrefix("/s/")]
+                val entry = synchronized(entries) { entries[path.removePrefix("/s/")] }
                 if (entry == null) {
                     writeHead(out, 404, emptyMap(), 0, cors = true)
                     out.flush()
@@ -138,7 +156,11 @@ object StreamProxy {
         }
         val length = headers["content-length"]?.toLongOrNull() ?: 0L
         Log.d(TAG, "relay HTTP $code range=${range ?: "-"} len=$length")
-        writeHead(out, code, headers, length, cors = true)
+        // When upstream sent no Content-Length, omit ours instead of sending
+        // "Content-Length: 0" ahead of a body: with Connection: close the
+        // close delimits the body, which is valid HTTP/1.1. The Range relay
+        // above is unchanged.
+        writeHead(out, code, headers, length, cors = true, omitLength = !headers.containsKey("content-length"))
         if (method != "HEAD") {
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
             if (body != null) {
@@ -161,7 +183,8 @@ object StreamProxy {
         code: Int,
         headers: Map<String, String>,
         length: Long,
-        cors: Boolean
+        cors: Boolean,
+        omitLength: Boolean = false
     ) {
         val reason = when (code) {
             200 -> "OK"
@@ -177,7 +200,7 @@ object StreamProxy {
             sb.append("Access-Control-Allow-Headers: range\r\n")
             sb.append("Access-Control-Expose-Headers: content-range, content-length, accept-ranges\r\n")
         }
-        if (!headers.keys.any { it.equals("content-length", true) } && code != 204) {
+        if (!omitLength && !headers.keys.any { it.equals("content-length", true) } && code != 204) {
             sb.append("Content-Length: ").append(length).append("\r\n")
         }
         if (code == 206) sb.append("Accept-Ranges: bytes\r\n")

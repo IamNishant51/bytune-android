@@ -1,4 +1,5 @@
-import { getOfflineBlob, deleteOfflineBlob, downloadOfflineTrack, getAllOfflineEntries, saveOfflineLyrics, deleteOfflineLyrics } from "./offline";
+import { getOfflineBlob, deleteOfflineBlob, downloadOfflineTrack, saveOfflineLyrics, deleteOfflineLyrics, listOfflineMeta, cancelOfflineDownload } from "./offline";
+import { enqueueDownload, cancelQueuedDownload, getDownloadQueueState } from "../lib/downloads";
 /**
  * The `window.bytune` bridge, Android edition.
  *
@@ -14,16 +15,26 @@ import { getOfflineBlob, deleteOfflineBlob, downloadOfflineTrack, getAllOfflineE
  * (Downloads, local-folder import, the PiP window, cloud accounts and window
  * chrome are the desktop's; on Android the app hides those surfaces.)
  */
-import type { ByTuneApi } from "../../electron/preload";
+import type { ByTuneApi, HapticKind } from "../../electron/preload";
 import type { DownloadProgress, Track } from "../types";
 import * as music from "./music";
 import * as lyrics from "./lyrics";
 import * as stats from "./stats";
-import * as auth from "./auth";
 import { importPlaylistFromUrl } from "../lib/playlistImport";
 import { useUI } from "../stores/ui";
 import { useLibrary } from "../stores/library";
 import { usePlayer } from "../stores/player";
+
+/* Auth (Supabase) is lazy-loaded: supabase-js must not be in the first-paint
+ * bundle for guest users, who never sign in. Every auth call site below goes
+ * through loadAuth(); the module type is kept via a type-only query so no
+ * static import — and no bundle weight — is introduced here. */
+type AuthModule = typeof import("./auth");
+let authModule: AuthModule | null = null;
+async function loadAuth(): Promise<AuthModule> {
+  if (!authModule) authModule = await import("./auth");
+  return authModule;
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -138,13 +149,16 @@ async function performMobileDownload(track: Track): Promise<void> {
   emitDownloadEvent({ type: "progress", id, downloaded: 0, total: 100 });
 
   try {
-    const audioPromise = downloadOfflineTrack(
+    const blob = await downloadOfflineTrack(
       track,
       (p) => emitDownloadEvent({ type: "progress", id, downloaded: p.downloaded, total: p.total }),
       ctrl.signal
     );
 
-    const lyricsPromise = lyrics
+    // Lyrics serialize AFTER the audio (Track C contract): one lyric fetch
+    // per download job, bounded by the queue to at most 2 concurrent
+    // fetches. A lyric failure never fails the download.
+    await lyrics
       .getLyrics({
         id: track.id,
         title: track.title,
@@ -159,7 +173,20 @@ async function performMobileDownload(track: Track): Promise<void> {
         /* lyrics failure does not abort audio download */
       });
 
-    const [blob] = await Promise.all([audioPromise, lyricsPromise]);
+    // Belt-and-braces: a cancel landing after the engine's own post-save
+    // check leaves a saved blob with no terminal event from the engine.
+    // Never emit `done` for it — drop the just-saved blob and emit
+    // `cancelled` instead so the queue slot releases cleanly.
+    if (ctrl.signal.aborted) {
+      await deleteOfflineBlob(id);
+      await deleteOfflineLyrics(id);
+      activeControllers.delete(id);
+      const idx = inFlightQueue.findIndex((q) => q.id === id);
+      if (idx !== -1) inFlightQueue.splice(idx, 1);
+      emitDownloadEvent({ type: "cancelled", id });
+      return;
+    }
+
     activeControllers.delete(id);
     const idx = inFlightQueue.findIndex((q) => q.id === id);
     if (idx !== -1) inFlightQueue.splice(idx, 1);
@@ -180,6 +207,11 @@ async function performMobileDownload(track: Track): Promise<void> {
 /* Downloads / local library                            */
 /* ------------------------------------------------------------------ */
 
+/* Track C contracts (landed): the bounded download queue lives in
+ * src/lib/downloads.ts and the offline engine in ./offline.ts — both
+ * imported statically above. startDownload branches on queue state (see
+ * the executor branch below); cancelDownload delegates to both. */
+
 const noDownloads = (): Promise<never> =>
   Promise.reject(new Error("Downloads are available in the desktop app."));
 
@@ -193,7 +225,7 @@ const emptyLibrary = { folders: [], tracks: [], albums: [], artists: [] };
 
 const api = {
   platform: "android",
-  versions: { app: "1.0.1", electron: "", chrome: "", node: "" },
+  versions: { app: "1.1.0", electron: "", chrome: "", node: "" },
 
   /* ---- music ---- */
   search: (query: string, light = false) => music.searchAll(query).then((r) => (light ? r : r)),
@@ -227,16 +259,26 @@ const api = {
     return stats.summary(p);
   },
   /** Resolves the stream (checking offline storage first) and hands back playable URL. */
-  getStreamUrl: async (id: string, _forceRotate = false, quality?: string) => {
+  getStreamUrl: async (id: string, forceRotate = false, quality?: string) => {
     const offline = await getOfflineBlob(id);
     if (offline) {
       return URL.createObjectURL(offline);
     }
-    const maxKbps = quality === "low" ? 64 : undefined;
-    const resolved = await music.resolveStream(id, maxKbps);
+    // Real quality caps: low ≤ 64 kbps, medium ≤ 128 kbps, high uncapped.
+    // Any other value (including a stale persisted "lossless") is uncapped.
+    const maxKbps = quality === "low" ? 64 : quality === "medium" ? 128 : undefined;
+    const resolved = await music.resolveStream(id, maxKbps, forceRotate);
     return proxyUrl(resolved.url, resolved.lufs, id);
   },
   getCanvas: async () => null,
+
+  /* ---- haptics (native shell; Track D implements the plugin method) ---- */
+  haptic: async (kind: HapticKind) => {
+    const native = shell();
+    if (native?.haptic) {
+      await native.haptic({ kind });
+    }
+  },
 
   /* ---- local library (none on Android yet) ---- */
   localLibrary: async () => emptyLibrary,
@@ -296,16 +338,18 @@ const api = {
 
   /* ---- accounts (Google OAuth + guest on Android) ---- */
   authGetSession: async () => {
-    return auth.readProfile();
+    return (await loadAuth()).readProfile();
   },
   authContinueGuest: async () => {
-    auth.writeProfile({ mode: "guest", freshInstall: false, userId: auth.readProfile().userId ?? "local" });
-    auth.announceAuth();
+    const a = await loadAuth();
+    a.writeProfile({ mode: "guest", freshInstall: false, userId: a.readProfile().userId ?? "local" });
+    a.announceAuth();
     return { ok: true };
   },
   authClearGuestProfile: async () => {
-    auth.writeProfile({ mode: null, userId: null, username: null, freshInstall: true, needsUsername: false });
-    auth.announceAuth();
+    const a = await loadAuth();
+    a.writeProfile({ mode: null, userId: null, username: null, freshInstall: true, needsUsername: false });
+    a.announceAuth();
     return { ok: true };
   },
   authSignUp: async () => {
@@ -315,21 +359,34 @@ const api = {
     throw new Error("Email sign-in needs the desktop app — use Google sign-in.");
   },
   authSignInGoogle: async () => {
-    return auth.signInGoogle();
+    return (await loadAuth()).signInGoogle();
   },
-  authUsernameAvailable: async (username: string) => auth.authUsernameAvailable(username),
-  authSetUsername: async (username: string) => auth.authSetUsername(username),
+  authUsernameAvailable: async (username: string) => (await loadAuth()).authUsernameAvailable(username),
+  authSetUsername: async (username: string) => (await loadAuth()).authSetUsername(username),
   authSkipUsername: async () => {
-    auth.writeProfile({ needsUsername: false });
-    auth.announceAuth();
+    const a = await loadAuth();
+    a.writeProfile({ needsUsername: false });
+    a.announceAuth();
     return { ok: true };
   },
   authSignOut: async () => {
-    await auth.authSignOut();
+    await (await loadAuth()).authSignOut();
     return { ok: true };
   },
   onAuthChanged: (cb: (info: any) => void) => {
-    return auth.onAuthChanged(cb);
+    // The listener registers once the auth module loads; unsubscribing
+    // before then simply means it never registers.
+    let off: (() => void) | null = null;
+    let cancelled = false;
+    void loadAuth()
+      .then((a) => {
+        if (!cancelled) off = a.onAuthChanged(cb);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      off?.();
+    };
   },
   syncStatus: async () => ({ lastSyncAt: null, state: "idle", lastError: null, available: false }),
   syncNow: async () => ({ ok: true }),
@@ -349,11 +406,30 @@ const api = {
 
   /* ---- downloads (offline storage) ---- */
   startDownload: async (track: Track) => {
-    void performMobileDownload(track);
+    // Executor branch (Track C contract): the queue pump launches a
+    // claimed slot by calling window.bytune.startDownload re-entrantly.
+    // When the id already holds an active slot, run the executor
+    // directly — delegating back to enqueueDownload would hit its
+    // queued-row guard, no-op, and stall the slot forever (the queue's
+    // 10s launch watchdog would fail it loudly). Fresh calls enqueue.
+    if (getDownloadQueueState().active.includes(track.id)) {
+      void performMobileDownload(track);
+      return;
+    }
+    enqueueDownload(track);
   },
   cancelDownload: async (id: string) => {
     const ctrl = activeControllers.get(id);
     if (ctrl) ctrl.abort();
+    // Track C delegation: drop queued work / release the slot and stop
+    // the engine. Best-effort — a queue failure must never stop the
+    // local abort + blob cleanup + cancelled event below.
+    try {
+      cancelQueuedDownload(id);
+      cancelOfflineDownload(id);
+    } catch {
+      /* queue unavailable — local cleanup still runs */
+    }
     await deleteOfflineBlob(id);
     await deleteOfflineLyrics(id);
     emitDownloadEvent({ type: "cancelled", id });
@@ -378,8 +454,16 @@ export function installMobileBridge(): void {
   void useLibrary.persist.rehydrate();
   void usePlayer.persist.rehydrate();
 
-  // Reconcile offline downloads from IndexedDB into the library store so offline tracks are never lost
-  void getAllOfflineEntries().then((entries) => {
+  // Reconcile offline downloads from IndexedDB into the library store so offline tracks are never lost.
+  // Metadata-only listing (Track C's listOfflineMeta): boot never loads
+  // every stored blob into memory.
+  void (async () => {
+    let entries: Array<{ id: string; track?: Track; size: number }>;
+    try {
+      entries = await listOfflineMeta();
+    } catch {
+      entries = [];
+    }
     const lib = useLibrary.getState();
     for (const entry of entries) {
       const existing = lib.downloads[entry.id];
@@ -402,14 +486,21 @@ export function installMobileBridge(): void {
         total: entry.size,
       });
     }
-  }).catch(() => undefined);
+  })().catch(() => undefined);
 
-  // Restore session
-  void auth.initAuth();
+  // Restore session — account profiles only, so supabase-js never loads for
+  // guests at startup. The profile key is shared with the auth module.
+  if (readProfile().mode === "account") {
+    void loadAuth()
+      .then((a) => a.initAuth())
+      .catch(() => undefined);
+  }
 
   // Handle incoming OAuth callback
   (window as any).__bytuneHandleOAuth = (url: string) => {
-    void auth.handleOAuthCallback(url);
+    void loadAuth()
+      .then((a) => a.handleOAuthCallback(url))
+      .catch(() => undefined);
   };
 
   // Handle incoming shared text (playlist link shared from Spotify or YT Music)
@@ -429,7 +520,9 @@ export function installMobileBridge(): void {
   if (native?.getPendingAction) {
     native.getPendingAction().then((res: any) => {
       if (res?.oauthUrl) {
-        void auth.handleOAuthCallback(res.oauthUrl);
+        void loadAuth()
+          .then((a) => a.handleOAuthCallback(res.oauthUrl))
+          .catch(() => undefined);
       }
       if (res?.sharedText) {
         void (window as any).__bytuneHandleSharedText(res.sharedText);

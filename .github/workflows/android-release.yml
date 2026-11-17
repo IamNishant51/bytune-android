@@ -1,0 +1,103 @@
+# Signed release APK, built in CI from the user's own keystore.
+#
+# Setup (once): see docs/android/CI-RELEASE.md. The four secrets below must
+# exist in the repo's Settings > Secrets and variables > Actions, or this
+# workflow fails fast with a clear error instead of producing an APK signed
+# with the wrong key. No secret values live in this file.
+#
+# Triggers: pushing a tag like v1.1.0 (also creates a DRAFT GitHub release
+# with the APK attached), or a manual run from the Actions tab (APK only,
+# as a build artifact — no release is created).
+
+name: Android release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release secrets exist
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -z "$KEYSTORE_BASE64" ] && missing="$missing KEYSTORE_BASE64"
+          [ -z "$KEYSTORE_PASSWORD" ] && missing="$missing KEYSTORE_PASSWORD"
+          [ -z "$KEY_ALIAS" ] && missing="$missing KEY_ALIAS"
+          [ -z "$KEY_PASSWORD" ] && missing="$missing KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub Actions secret(s):$missing. See docs/android/CI-RELEASE.md for setup."
+            exit 1
+          fi
+          echo "All four release secrets are present."
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck and build renderer
+        run: npm run build
+
+      - name: Sync web assets into the Android project
+        run: npx cap sync android
+
+      - name: Decode keystore and write keystore.properties
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::Missing secret KEYSTORE_BASE64. See docs/android/CI-RELEASE.md for setup."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$HOME/bytune-release.jks"
+          chmod 600 "$HOME/bytune-release.jks"
+          cat > android/keystore.properties <<EOF
+          storeFile=$HOME/bytune-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          echo "keystore.properties written (values not shown)."
+
+      - name: Build signed release APK
+        run: |
+          chmod +x android/gradlew
+          cd android && ./gradlew assembleRelease --console=plain
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bytune-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Create draft GitHub release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: android/app/build/outputs/apk/release/app-release.apk

@@ -1,5 +1,6 @@
-import { Fragment, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useMemo, useRef, useState } from "react";
 import { useIsMobile } from "../lib/useIsMobile";
+import { haptic } from "../lib/haptics";
 import { AlertCircle, Check, Download, Heart, ListStart, Loader2, MoreHorizontal, Pause, Play } from "lucide-react";
 import { useLibrary } from "../stores/library";
 import { usePlayer } from "../stores/player";
@@ -40,13 +41,21 @@ interface TrackRowProps {
   index: number;
   isCurrent: boolean;
   isPlaying: boolean;
+  liked: boolean;
   onPlay: (index: number) => void;
   menuFor: (track: Track) => MenuItem[];
   showAlbum: boolean;
 }
 
-function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlbum }: TrackRowProps) {
-  const liked = useLibrary((s) => s.liked.some((t) => t.id === track.id));
+/**
+ * Memoized: the list re-renders on every play/pause (it subscribes to player
+ * state), and without memo every row re-rendered with it. Props are kept
+ * referentially stable by TrackList (useCallback handlers, a primitive
+ * `liked` from the shared Set) so only the rows that actually changed
+ * re-render. The `liked` lookup is O(1) — the old per-row
+ * `liked.some(...)` selector was O(rows × liked) on every library change.
+ */
+const TrackRow = memo(function TrackRow({ track, index, isCurrent, isPlaying, liked, onPlay, menuFor, showAlbum }: TrackRowProps) {
   const toggleLike = useLibrary((s) => s.toggleLike);
   const openContextMenu = useUI((s) => s.openContextMenu);
   const navigate = useUI((s) => s.navigate);
@@ -80,11 +89,11 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
     if (isSwiping.current) {
       if (swipeX > 55) {
         usePlayer.getState().addToQueue(track, true);
-        if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(15);
+        haptic("light");
         useUI.getState().toast(`Queued next: ${track.title}`, "info");
       } else if (swipeX < -55) {
         toggleLike(track);
-        if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([12, 35, 12]);
+        haptic("success");
         useUI.getState().toast(liked ? "Removed from Liked Songs" : "Added to Liked Songs", "info");
       }
     }
@@ -99,7 +108,7 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
   };
 
   return (
-    <div className="relative overflow-hidden rounded-lg select-none">
+    <div className="relative overflow-hidden rounded-lg select-none cv-row">
       {/* Swipe reveal action layer */}
       {isMobile && Math.abs(swipeX) > 4 && (
         <div
@@ -174,6 +183,7 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
 
       <Artwork
         src={track.thumb}
+        trackId={track.id}
         className="w-[52px] h-[52px] rounded-lg shrink-0"
         iconClassName="w-4 h-4"
         alt=""
@@ -216,6 +226,7 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
           onClick={(e) => {
             e.stopPropagation();
             toggleLike(track);
+            haptic("success");
           }}
           title={liked ? "Remove from Liked" : "Add to Liked"}
           aria-label={liked ? "Remove from Liked" : "Add to Liked"}
@@ -245,7 +256,7 @@ function TrackRow({ track, index, isCurrent, isPlaying, onPlay, menuFor, showAlb
     </div>
     </div>
   );
-}
+});
 
 interface TrackListProps {
   tracks: Track[];
@@ -269,7 +280,28 @@ export function TrackList({
   const currentId = usePlayer((s) => s.queue[s.index]?.id ?? null);
   const playing = usePlayer((s) => s.playing);
   const playQueue = usePlayer((s) => s.playQueue);
-  const play = onPlay ?? ((i: number) => playQueue(tracks, i));
+  const likedTracks = useLibrary((s) => s.liked);
+  // One Set per library change; rows read O(1) from it via a primitive prop.
+  const likedIds = useMemo(() => new Set(likedTracks.map((t) => t.id)), [likedTracks]);
+  const play = useCallback(
+    (i: number) => {
+      if (onPlay) onPlay(i);
+      else playQueue(tracks, i);
+    },
+    [onPlay, playQueue, tracks]
+  );
+  const menuForCb = useCallback((track: Track) => menuFor(track), [menuFor]);
+
+  // Row keys: the same track id can legitimately appear twice in a playlist
+  // or queue, so a bare id is not unique — but a raw index suffix shifts
+  // every key when a row is inserted above. Occurrence numbers
+  // (`id`, `id#1`, …) are stable across re-renders and track advances.
+  const occurrence = new Map<string, number>();
+  const rowKey = (id: string): string => {
+    const n = occurrence.get(id) ?? 0;
+    occurrence.set(id, n + 1);
+    return n === 0 ? id : `${id}#${n}`;
+  };
 
   if (!tracks.length) {
     return <EmptyState icon={Play} title={emptyTitle} body={emptyLabel ?? "Tracks will appear here."} />;
@@ -289,14 +321,15 @@ export function TrackList({
       )}
       <div>
         {tracks.map((track, i) => (
-          <Fragment key={`${track.id}-${i}`}>
+          <Fragment key={rowKey(track.id)}>
             <TrackRow
               track={track}
               index={i}
               isCurrent={track.id === currentId}
               isPlaying={playing}
+              liked={likedIds.has(track.id)}
               onPlay={play}
-              menuFor={menuFor}
+              menuFor={menuForCb}
               showAlbum={showAlbum}
             />
             {/* Hairline divider, inset to the title column — mobile's

@@ -115,7 +115,6 @@ body {
    large sheets — revisit if glass ever covers a wide area. */
 .glass,
 .glass-pill,
-.glass-card,
 .mobile-player,
 .mobile-nav,
 .mobile-subview-bar {
@@ -163,15 +162,38 @@ body {
 }
 
 /* Cards set their own radius with utilities; this is the fallback so a bare
-   .glass-card still has one. */
+   .glass-card still has one. Cards are CONTENT, not chrome (Apple HIG: glass
+   belongs on the control layer, never the content layer) — so they wear a
+   solid fill + the fresnel rim, and pay no backdrop blur while scrolling. */
 .glass-card {
+  position: relative;
+  isolation: isolate;
+  border: none;
   border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.015) 44%, rgba(255, 255, 255, 0) 70%),
+    rgb(var(--panel));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.20),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.45),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    0 1px 1px rgba(0, 0, 0, 0.25),
+    0 10px 24px -6px rgba(0, 0, 0, 0.55),
+    0 28px 56px -28px rgba(0, 0, 0, 0.70);
+}
+
+/* Shared small-chip blur (seek bubble, Esc hint): one token so Tailwind
+   backdrop-blur-* utilities never bypass the recipe again. */
+.glass-chip {
+  backdrop-filter: blur(16px) saturate(160%) brightness(1.04);
+  -webkit-backdrop-filter: blur(16px) saturate(160%) brightness(1.04);
 }
 
 /* Popovers, menus, dialogs — the same material, but effectively OPAQUE: a
    floating menu is read over bright artwork and dense text, and nested glass
    ancestors can silently drop the backdrop blur, so the base itself has to
-   hide the page. At 0.98 anything underneath contributes ~2%. */
+   hide the page. At 0.98 anything underneath contributes ~2%, so no blur is
+   paid at all — this is the solid treatment, same as .glass-strong-solid. */
 .glass-strong {
   position: relative;
   isolation: isolate;
@@ -179,8 +201,6 @@ body {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 60%),
     rgba(17, 17, 19, 0.98);
-  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
-  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
     0 24px 64px -16px rgba(0, 0, 0, 0.75),
@@ -1002,14 +1022,16 @@ html.liquid-glass .mobile-chrome-dock > div {
    over scrolling text, and at 0.44 the lines behind stayed readable. */
 html.liquid-glass .mobile-player {
   --lg-tint-alpha: 0.52;
-  --lg-blur: 26px;
+  /* One backdrop pass, dock token: 16px blur — the old 26px override
+     re-blurred the scrolling content behind the pill every frame. */
+  backdrop-filter: blur(16px) saturate(160%) brightness(1.04);
+  -webkit-backdrop-filter: blur(16px) saturate(160%) brightness(1.04);
   height: 58px;
   border-radius: 20px;
   padding: 0 10px 0 8px;
   overflow: hidden;
   cursor: pointer;
   transform: translateZ(0);
-  will-change: transform;
   contain: layout style;
   transition: transform 180ms var(--apple-spring-fluid), filter 180ms ease-out;
 }
@@ -1024,7 +1046,10 @@ html.liquid-glass .mobile-player-progress {
   height: 2px;
 }
 html.liquid-glass .mobile-player-progress > span {
-  transition: width 240ms linear;
+  /* No CSS transition: the width is driven by a rAF loop interpolating
+     between timeupdate ticks (MobilePlayerBar), and a transition on top
+     would lag every frame behind the interpolated value. */
+  transition: none;
 }
 html.liquid-glass .mobile-player-art {
   border-radius: 10px;
@@ -1054,13 +1079,13 @@ html.liquid-glass .mobile-player-play:active {
    artwork at the screen edge, where white labels have to stay legible. */
 html.liquid-glass .mobile-nav {
   --lg-tint-alpha: 0.54;
-  --lg-blur: 26px;
+  backdrop-filter: blur(16px) saturate(160%) brightness(1.04);
+  -webkit-backdrop-filter: blur(16px) saturate(160%) brightness(1.04);
   height: 56px;
   border-radius: 28px;
   padding: 0 4px;
   overflow: hidden;
   transform: translateZ(0);
-  will-change: transform;
   contain: layout style;
 }
 .mobile-tab-indicator {
@@ -1077,8 +1102,9 @@ html.liquid-glass .mobile-nav {
     0 2px 8px rgba(0, 0, 0, 0.28);
   pointer-events: none;
   z-index: 1;
-  transition: transform 260ms var(--apple-spring-fluid), width 260ms var(--apple-spring-fluid);
-  will-change: transform;
+  /* Transform-only: the width is fixed (100% / tab count) and never changes,
+     so animating it would only buy layout work per tab tap. */
+  transition: transform 260ms var(--apple-spring-fluid);
 }
 
 html.liquid-glass .mobile-tab svg {
@@ -1650,6 +1676,23 @@ html.noglass .mobile-sheet {
   animation: fs-exit 210ms var(--ease-exit) forwards;
 }
 
+/* Entrance: the Apple Music slide-up — the whole room rises from the bottom
+   of the screen on the fluid spring (420ms), replacing the old fade-only
+   entrance. Transform-only; the reduce-motion rules flatten it. When the
+   FLIP hero morph runs (mobile, pill present), the overlay root is animated
+   by WAAPI instead and this class is not applied. */
+@keyframes np-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.np-enter {
+  animation: np-slide-up 420ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
 /* ---------- fullscreen cinematic mode ----------
    The album-art-driven backdrop crossfade, the hero artwork's breathing
    pulse and the ambient visualizer. Transform + opacity only; the
@@ -1684,7 +1727,6 @@ html.noglass .mobile-sheet {
 }
 .fs-art-wrap {
   transition: transform 420ms var(--apple-art-breathe, cubic-bezier(0.2, 0.9, 0.3, 1));
-  will-change: transform;
 }
 .fs-art-wrap.is-paused {
   transform: scale(0.88);
@@ -1787,19 +1829,16 @@ html.noglass .mobile-sheet {
 
 .liquid-aurora-blob-1 {
   animation: liquid-aurora-1 22s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  will-change: transform;
   contain: strict;
 }
 
 .liquid-aurora-blob-2 {
   animation: liquid-aurora-2 28s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  will-change: transform;
   contain: strict;
 }
 
 .liquid-aurora-wave {
   animation: liquid-aurora-wave 18s ease-in-out infinite;
-  will-change: transform, opacity;
   contain: strict;
 }
 
@@ -1900,12 +1939,13 @@ html.platform-mac .ob-headline {
 }
 .mobile-search-clear {
   position: absolute;
-  right: 14px;
+  right: 6px;
   top: 50%;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  /* 40px minimum touch target (was 24px). */
+  width: 40px;
+  height: 40px;
   transform: translateY(-50%);
   border-radius: 999px;
   color: rgb(var(--ink-dim));
@@ -2000,7 +2040,8 @@ html.platform-mac .ob-headline {
   border-radius: 999px;
   background: linear-gradient(90deg, rgb(var(--primary)), #ff5e8a);
   box-shadow: 0 0 8px rgb(var(--primary) / 0.7);
-  transition: width 240ms linear;
+  /* Width is rAF-driven (see the liquid-glass rule above) — no transition. */
+  transition: none;
 }
 .mobile-player-row {
   display: flex;
@@ -2146,6 +2187,12 @@ html.platform-mac .ob-headline {
   border-radius: 24px 24px 0 0;
   padding-bottom: env(safe-area-inset-bottom);
   animation: mobile-sheet-up 340ms var(--apple-spring-fluid, cubic-bezier(0.32, 0.72, 0, 1));
+}
+/* While a finger drags the sheet, the entrance animation must not fight the
+   inline transform — and will-change is only worth paying for during the
+   drag itself, never permanently. */
+.mobile-sheet.is-dragging {
+  animation: none;
   will-change: transform;
 }
 /* Dismissal mirrors the entrance instead of snapping the sheet away. The
@@ -2233,6 +2280,19 @@ html.platform-mac .ob-headline {
   /* Remove dark top tint wash and dark sticky topbar on mobile for clean edge-to-edge Apple Music aesthetic */
   .home-tint {
     display: none !important;
+  }
+  /* Off-screen rows/cards skip layout, style and paint until near the
+     viewport — the cheap half of list virtualization with zero JS. The
+     intrinsic sizes are the measured row/card heights; `auto` lets the
+     browser learn the real size after first render, so scroll position
+     stays honest. Mobile block only: desktop lists are short and wide. */
+  .cv-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 56px;
+  }
+  .cv-card {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 220px;
   }
   .mobile-topbar {
     display: none !important;

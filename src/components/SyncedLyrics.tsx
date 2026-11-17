@@ -107,6 +107,10 @@ function WordLine({
     return () => window.cancelAnimationFrame(raf);
   }, [playing]);
   const pos = getPlaybackPosition() - offset;
+  // The karaoke line keeps its drop-shadow filter: its words are gradient
+  // text with a transparent fill, and text-shadow bleeds through transparent
+  // glyphs (a blurry white fill instead of a halo). The plain line below
+  // uses text-shadow, which costs no filter repaint.
   return (
     <span className={lineSizeClass(variant)}
       style={glow ? { filter: "drop-shadow(0 0 22px rgba(255,255,255,0.28))" } : undefined}
@@ -121,6 +125,8 @@ function WordLine({
               : 0;
         const pct = Math.round(p * 100);
         return (
+          // Word position IS the identity here: spans align to words by
+          // index, and repeated words ("la la la") share text.
           <span
             key={i}
               style={{
@@ -202,7 +208,17 @@ export function LyricsView({
     [synced],
   );
 
-  // Static text for the plain (unsynced) treatment: the provider's plain
+  // Line keys: identical timestamps occur (providers emit duplicate lines),
+  // so a bare time is not unique — but a raw index suffix shifts every key
+  // when a line is filtered above. Occurrence numbers per timestamp.
+  const lineKeys = useMemo(() => {
+    const occ = new Map<number, number>();
+    return (lines ?? []).map((l) => {
+      const n = occ.get(l.time) ?? 0;
+      occ.set(l.time, n + 1);
+      return n === 0 ? `${l.time}` : `${l.time}#${n}`;
+    });
+  }, [lines]);
   // lyrics when they exist, otherwise the synced lines' own words joined in
   // order — so switching synced lyrics OFF never blanks the panel on tracks
   // that only shipped synced lines. Gap/instrumental markers carry no words.
@@ -338,7 +354,7 @@ export function LyricsView({
             if (line.gap) {
               return (
                 <div
-                  key={`${line.time}-${i}`}
+                  key={lineKeys[i]}
                   className="flex items-center gap-2 py-2 px-1"
                   title="Instrumental"
                   style={{ opacity: Math.max(0.15, depth.style.opacity as number) }}
@@ -375,7 +391,7 @@ export function LyricsView({
 
             return (
               <button
-                key={`${line.time}-${i}`}
+                key={lineKeys[i]}
                 ref={i === activeIndex ? activeRef : undefined}
                 onClick={() => seek(Math.max(0, line.time + offset - 0.15))}
                 title="Jump here"
@@ -387,7 +403,7 @@ export function LyricsView({
                 ) : (
                   <span
                     className={lineSizeClass(variant)}
-                    style={active && glowLines ? { filter: "drop-shadow(0 0 22px rgba(255,255,255,0.28))" } : undefined}
+                    style={active && glowLines ? { textShadow: "0 0 22px rgba(255,255,255,0.28)" } : undefined}
                   >
                     {line.text}
                   </span>

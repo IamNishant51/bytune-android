@@ -11,12 +11,18 @@
  * or flickers, and never paints a coloured glow the artwork didn't supply.
  */
 
+import { upgradeArtwork } from "./artwork";
+
 export interface Palette {
   /** "R G B" triplet strings consumed by CSS */
   primary: string;
   secondary: string;
 }
 
+/* Bounded like the seed cache in lib/palette.ts (same eldest-eviction
+   pattern): the ambient palette is keyed by artwork URL and must not grow
+   with the session. */
+const AMBIENT_CACHE_ENTRIES = 64;
 const cache = new Map<string, Palette>();
 
 /* Neutral fallback: no hue of its own, so an unread sleeve stays black.
@@ -37,6 +43,14 @@ export function resetAmbient(): void {
 }
 
 /**
+ * Drop the cached palettes (memory-pressure response). The next artwork
+ * read re-extracts; nothing visible changes until then.
+ */
+export function clearAmbientCache(): void {
+  cache.clear();
+}
+
+/**
  * Samples the artwork and applies its palette. Returns the palette that was
  * applied (or null when nothing changed because the artwork failed to load).
  */
@@ -54,6 +68,10 @@ export async function setAmbientFromArtwork(url: string | undefined | null): Pro
 
   const palette = await extractPalette(url);
   if (palette) {
+    if (cache.size >= AMBIENT_CACHE_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest) cache.delete(oldest);
+    }
     cache.set(url, palette);
     applyPalette(palette);
     return palette;
@@ -125,7 +143,9 @@ export async function loadArtworkImage(
 
 /** Low-level extraction used by ambient + per-page palette hooks. */
 export async function extractPalette(url: string): Promise<Palette | null> {
-  const loaded = await loadArtworkImage(url);
+  // The canvas is 30px: decode a small rendition, not the display URL.
+  const small = upgradeArtwork(url, 160) || url;
+  const loaded = await loadArtworkImage(small);
   if (!loaded) return null;
   const { image, cleanup } = loaded;
   try {

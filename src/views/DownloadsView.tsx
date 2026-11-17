@@ -1,4 +1,5 @@
-import { AlertCircle, Check, Download, FolderOpen, Loader2, Music2, Play, RotateCcw, Shuffle, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, Check, Download, FolderOpen, HardDrive, Loader2, Music2, Play, RotateCcw, Shuffle, Trash2, X } from "lucide-react";
 import { usePlayer } from "../stores/player";
 import { isAndroid } from "../lib/platform";
 import { downloadMenuItems } from "../lib/trackActions";
@@ -7,7 +8,8 @@ import { useLibrary } from "../stores/library";
 import { useSettings } from "../stores/settings";
 import { tintHoverHandlers, useUI } from "../stores/ui";
 import { cancelDownload, startDownload } from "../lib/downloads";
-import { plural } from "../lib/format";
+import { fmtBytes, plural } from "../lib/format";
+import { getOfflineStorageStats, type OfflineStorageStats } from "../mobile/offline";
 import { Artwork, Btn, EmptyState, IconBtn } from "../components/primitives";
 import type { DownloadItem } from "../stores/library";
 
@@ -130,6 +132,22 @@ export function DownloadsView() {
   const failedCount = items.filter((i) => i.status === "failed").length;
   const activeCount = items.filter((i) => i.status === "downloading" || i.status === "queued").length;
 
+  // Offline storage accounting (Android only — desktop downloads are files
+  // on disk, not IndexedDB blobs). Refreshed whenever the registry changes.
+  const [storageStats, setStorageStats] = useState<OfflineStorageStats | null>(null);
+  useEffect(() => {
+    if (!isAndroid) return;
+    let cancelled = false;
+    void getOfflineStorageStats()
+      .then((stats) => {
+        if (!cancelled) setStorageStats(stats);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [downloads]);
+
   const playTrack = (track: DownloadItem["track"]): void => usePlayer.getState().playTrack(track);
 
   /** Android deletes the offline blob too; desktop only forgets the row (the file stays on disk). */
@@ -168,6 +186,31 @@ export function DownloadsView() {
     }
   };
 
+  /** Android only: delete every finished download (blobs included). */
+  const deleteAllDownloads = (): void => {
+    if (doneCount === 0) return;
+    openDialog({
+      title: "Delete all downloads?",
+      body: `${plural(doneCount, "saved song", "saved songs")} will be deleted from this device and can only be streamed online afterwards. Liked songs stay liked — only the offline copies are removed.`,
+      confirmLabel: "Delete all",
+      danger: true,
+      onConfirm: () => {
+        for (const item of items) {
+          if (item.status === "done") {
+            removeDownload(item.track.id);
+            cancelDownload(item.track.id);
+          }
+        }
+        toast("All downloads deleted");
+      },
+    });
+  };
+
+  const storageUsedPct =
+    storageStats && storageStats.capBytes > 0
+      ? Math.min(100, Math.round((storageStats.totalBytes / storageStats.capBytes) * 100))
+      : 0;
+
   return (
     <div className="space-y-7">
       <div className="flex items-end justify-between gap-4 animate-slide-up">
@@ -191,6 +234,46 @@ export function DownloadsView() {
           </Btn>
         )}
       </div>
+
+      {isAndroid && storageStats && (
+        <div className="rounded-xl border border-ink-hi/[0.08] bg-ink-hi/[0.03] px-4 py-3 space-y-2 animate-slide-up">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-[13px] text-ink">
+              <HardDrive className="w-4 h-4 text-ink-dim shrink-0" />
+              <span>
+                {fmtBytes(storageStats.totalBytes)} used · {plural(storageStats.trackCount, "track", "tracks")} saved ·
+                cap {fmtBytes(storageStats.capBytes)}
+              </span>
+            </div>
+            {doneCount > 0 && (
+              <Btn variant="glass" size="sm" icon={Trash2} onClick={deleteAllDownloads}>
+                Delete all downloads
+              </Btn>
+            )}
+          </div>
+          <div className="h-1.5 rounded-full bg-ink-hi/10 overflow-hidden">
+            <div
+              className={`h-full rounded-full ${storageStats.overCap ? "bg-red-400" : storageStats.nearCap ? "bg-amber-400" : "bg-accent"}`}
+              style={{ width: `${storageUsedPct}%` }}
+            />
+          </div>
+          {storageStats.overCap && (
+            <p className="text-[12px] text-red-400">
+              Over the offline storage cap. The oldest unliked downloads are removed automatically before new
+              downloads start — liked downloads are never removed.
+            </p>
+          )}
+          {!storageStats.overCap && storageStats.nearCap && (
+            <p className="text-[12px] text-amber-400">
+              Almost at the offline storage cap. Delete downloads you no longer need to make room.
+            </p>
+          )}
+          <p className="text-[12px] text-ink-faint">
+            Deleting downloads removes saved songs from this device. Clearing the app cache in Android Settings
+            does not delete downloads.
+          </p>
+        </div>
+      )}
 
       {items.length === 0 ? (
         <EmptyState

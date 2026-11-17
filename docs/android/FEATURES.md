@@ -17,7 +17,7 @@ in `STATUS.md`.
 | Feature | Desktop reference | Android | Notes / what is missing | Task |
 |---|---|---|---|---|
 | Stream YouTube Music audio | `electron/music-service.ts` → `getStreamUrl` | `WORKS` | InnerTube rotation + native proxy. `relay HTTP 206` observed | — |
-| Quality ceiling | `src/views/SettingsView.tsx` "Streaming quality" | `UNVERIFIED` | Setting renders; ceiling not measured against a real file | A-312 |
+| Quality ceiling | `src/views/SettingsView.tsx` "Streaming quality" | `UNVERIFIED` | Setting renders; 1.1.0 enforces real caps in code (low ≤64, medium ≤128, high uncapped; stored "lossless" migrates to "high"); ceiling not measured against a real file | A-312 |
 | Loudness normalisation | `lufs` via `&meta=1` on the proxy URL | `UNVERIFIED` | Proxy answers `{"lufs":n}`; the gain path is in `src/lib/audio.ts`, unmeasured | A-312 |
 | Play / pause / seek | `src/lib/audio.ts` | `WORKS` | Progress advanced; pause froze at 14.1555% for 5 s; resume worked | — |
 | Next / previous | `src/stores/player.ts` | `WORKS` | Transport buttons present and wired; next verified via queue advance | — |
@@ -33,8 +33,10 @@ in `STATUS.md`.
 | Audio focus (call interrupts) | — | `WORKS` | Chromium's `AudioFocusDelegate` holds focus: call → `LOSS_TRANSIENT`, audio output released; call ends → resumes. See D15 | — |
 | Headphone unplug pauses | — | `WORKS` | `BecomingNoisyReceiver` → `Becoming noisy -> pausing` | — |
 | Background playback | — | `WORKS` | Foreground service `mediaPlayback`: screen off, playback advanced across queue tracks, `AAudio state:started`, `isForeground=true` | — |
-| Network switch recovery | `src/lib/audio.ts` error recovery | `UNVERIFIED` | Not exercised | A-206 |
-| Stream error recovery / client rotation | `src/lib/audio.ts` | `UNVERIFIED` | Rotation code exists; forced-failure path untested | A-506 |
+| Network switch recovery | `src/lib/audio.ts` error recovery | `UNVERIFIED` | 1.1.0 adds online/offline recovery + park-on-network-error in code; not exercised on device | A-206 |
+| Stream error recovery / client rotation | `src/lib/audio.ts` | `UNVERIFIED` | 1.1.0: parallel VISIONOS+ANDROID_VR race, ~12s deadline, expiry-aware cache, 403 `forceRotate` + position restore — all code-only, forced-failure path untested | A-506 |
+| Lossless audio badge | `src/components/NowPlaying.tsx` "Lossless" badge + specs modal | `HIDDEN` | Removed 2026-11-17: streams are lossy Opus (≤256 kbps); the badge + specs modal (Opus 48kHz/256kbps) mislabelled lossy audio as lossless. The desktop-only `DownloadQuality` "lossless" label remains in code, gated to the desktop settings group. | — |
+| Sound Enhancer / EQ | `src/components/NowPlaying.tsx` EQ sheet | `HIDDEN` | Removed 2026-11-17: no audio-graph wiring exists (no `BiquadFilter`/`MediaElementSource` in the tree); presets/sliders changed nothing. D10 forbids re-adding it without reversing the ADR. Dead `eqPreset`/`eqBands` state remains in `src/stores/settings.ts`. | — |
 
 ---
 
@@ -44,7 +46,7 @@ in `STATUS.md`.
 |---|---|---|---|---|
 | Home feed | `src/views/HomeView.tsx` | `WORKS` | Live shelves rendered on a fresh install | — |
 | Explore mood grid | `src/views/ExploreView.tsx` | `WORKS` | 2-col responsive duotone grid; tapping a mood searches results; back restores scroll position | — |
-| Search: results + filters | `src/views/SearchView.tsx` | `WORKS` | Typed query → All/Songs/Videos/Albums/Artists/Playlists; album opened from results | — |
+| Search: results + filters | `src/views/SearchView.tsx` | `WORKS` | Typed query → All/Songs/Videos/Albums/Artists/Playlists; album opened from results. 1.1.0 caps initial rows at 60 with "Show more" (memory guard on 4 GB phones). | — |
 | Search suggestions | `src/mobile/MobileShell.tsx` | `WORKS` | Floating glass suggestions dropdown with debounce and touch selection | — |
 | Recent searches | `src/stores/recents.ts` | `WORKS` | Panel renders on the Search tab; tapping pill searches; clear all works | — |
 | Search infinite scroll | `src/views/SearchView.tsx` | `WORKS` | IntersectionObserver sentinel fetches next page continuation on scroll near bottom | — |
@@ -67,7 +69,7 @@ in `STATUS.md`.
 | Folders (organise playlists) | `src/views/LibraryView.tsx` | `PARTIAL` | Folder count hidden on Android; folder UI unverified | A-107 |
 | Pin / reorder | `src/stores/library.ts` | `UNVERIFIED` | Desktop uses drag-and-drop; touch reorder not built | A-104 |
 | Add to playlist | `src/lib/trackActions.ts` | `WORKS` | Long-press action sheet opens inline playlist list with New playlist... | — |
-| Downloads | `electron/downloads.ts` | `WORKS` | Offline IndexedDB audio cache (`src/mobile/offline.ts`), `Range: bytes=0-` on the native GET so googlevideo streams at full speed, instant blob playback, playlist download/remove, track download badge | A-301 |
+| Downloads | `electron/downloads.ts` | `WORKS` | Offline IndexedDB audio cache (v3: `meta`/`artwork`/`partials`/`chunks` stores). 1.1.0 replaced the transport with chunked resumable `Range` downloads via the loopback proxy, a FIFO queue (2 concurrent, 1 on low-memory), a storage cap + LRU eviction, and real byte progress. The device evidence in `STATUS.md` is for the pre-1.1.0 engine; re-verification owed. | A-301 |
 | Local music import | `electron/local-library.ts` | `HIDDEN` | Bridge returns `null`; tile removed | A-302 |
 | Playlist drag-and-drop | `src/lib/dnd.ts` | `MISSING` | HTML5 DnD does not work on touch | A-104 |
 | Sort playlist tracks | `src/lib/playlistSort.ts` | `WORKS` | "⋯" → Sort: Title / Artist / Album / Duration + Custom order; re-tapping the ticked key reverses. View-level, stored order untouched. No Date added sort (`Track` has no `addedAt`) | — |
@@ -83,8 +85,8 @@ in `STATUS.md`.
 | Now Playing overlay | `src/components/NowPlaying.tsx` | `WORKS` | Compact overlay at 412dp: hero art, glow, title/artist, seek bar, transport, sheet toggles, swipe down / back gesture dismiss | — |
 | Queue inside Now Playing | `src/components/RightRail.tsx` + `NowPlaying` switch | `WORKS` | `src/mobile/MobileShell.tsx` (`MobileSheet`) with `src/mobile/MobileQueue.tsx`: current track card, upcoming list, jump, remove, touch drag reorder | — |
 | Lyrics view | `src/components/LyricsCenter.tsx`, `src/components/SyncedLyrics.tsx` | `WORKS` | LRCLIB synced lyrics inside `src/mobile/MobileShell.tsx` (`MobileSheet`), active line advance, breathing dots, blur de-emphasis | — |
-| Lyrics providers | `electron/lyrics.ts` (2139 lines, multi-provider) | `PARTIAL` | Android has LRCLIB only (`src/mobile/lyrics.ts`) | A-304 |
-| Word-level / karaoke lyrics | `electron/lyrics.ts` | `MISSING` | Line-sync only on Android | A-304 |
+| Lyrics providers | `electron/lyrics.ts` (2139 lines, multi-provider) | `PARTIAL` | 1.1.0 ported the desktop 14-provider engine (`src/lib/lyricsEngine.ts`, lazy-loaded) into code; on-device verification owed. The LRCLIB path remains the verified one. | A-304 |
+| Word-level / karaoke lyrics | `electron/lyrics.ts` | `PARTIAL` | Word-level sync exists in the ported engine code (1.1.0); not exercised on device | A-304 |
 | Lyrics offset / tap-to-seek | `src/components/SyncedLyrics.tsx` | `WORKS` | Tap any lyric line seeks playback and updates active line immediately | — |
 | Canvas (animated artwork) | `electron/canvas.ts` → `src/lib/canvas.ts` | `STUB` | `getCanvas` returns `null`; falls back to static art | A-303 |
 | Fullscreen / ambient mode | `NowPlaying.tsx` | `UNVERIFIED` | Overlay untested | A-101 |
@@ -98,16 +100,17 @@ Every group from `src/views/SettingsView.tsx`, and what Android does with it.
 
 | Group | Rows | Android | Task |
 |---|---|---|---|
-| Audio quality | Streaming quality | `PARTIAL` — renders, ceiling unmeasured | A-312 |
+| Audio quality | Streaming quality | `PARTIAL` — renders; 1.1.0 enforces real caps in code; ceiling unmeasured | A-312 |
 | Audio output | Output device | `HIDDEN` — sink picking is a desktop audio-stack feature; Android follows the system | — |
+| Sound Enhancer / EQ | EQ switch, presets, frequency sliders | `HIDDEN` — UI removed 2026-11-17: no audio-graph wiring existed; see §1 and D10 | — |
 | Downloads | Download folder, quality, export-compatible | `HIDDEN` — downloads are app-local IndexedDB audio; folder/quality/export rows are desktop-only | A-301 |
 | Playback | Crossfade, Automix, Skip silence, Autoplay, Playback speed | `PARTIAL` — all render; none measured on device | A-305…A-308 |
 | Appearance | Theme, reduce motion, accent | `UNVERIFIED` | A-312 |
 | Local music | Folder, rescan | `HIDDEN` — no SAF import | A-302 |
-| Your data | Replay, Export, Import | `PARTIAL` — Replay works; export/import are desktop-only | A-309 |
+| Your data | Replay, Export, Import | `PARTIAL` — Replay works; export/import are desktop-only; backup/restore rows hidden on Android (1.1.0) because sync is fake | A-309 |
 | Miscellaneous | Don't repeat suggestions, and similar | `UNVERIFIED` | A-312 |
 | Danger zone | Clear data, delete account | `UNVERIFIED` — must not be a dead end | A-312 |
-| ByTune account | Sign in, sync | `WORKS` | Supabase Google OAuth PKCE (`src/mobile/auth.ts`) + deep-link callback `bytune://oauth/callback` | A-310 |
+| ByTune account | Sign in, sync | `PARTIAL` — Google sign-in works (Supabase PKCE + deep-link callback `bytune://oauth/callback`); cloud sync methods return fake success and their UI is hidden on Android — no real sync exists | A-310 |
 
 ---
 
@@ -116,18 +119,23 @@ Every group from `src/views/SettingsView.tsx`, and what Android does with it.
 | Feature | Desktop reference | Android | Notes | Task |
 |---|---|---|---|---|
 | Three-pane shell | `src/App.tsx` | `HIDDEN` | Compact widths get one pane; expanded widths will get it back | A-404 |
-| Sidebar navigation | `src/components/Sidebar.tsx` | `PARTIAL` | Replaced by a five-tab bottom bar | A-402 |
-| Bottom tab bar | — (Android only) | `WORKS` | Home, Explore, Search, Library, Replay | — |
+| Sidebar navigation | `src/components/Sidebar.tsx` | `PARTIAL` | Replaced by a four-tab bottom bar | A-402 |
+| Bottom tab bar | — (Android only) | `WORKS` | Home, Explore, Search, Library (Replay moved to Settings) | — |
 | Back navigation | `src/stores/ui.ts` → `goBack` | `WORKS` | Top-bar back arrow + Android back | — |
 | Mobile search field | — (Android only) | `WORKS` | `MobileSearchField`; added this session | — |
+| Home-screen widget | — (Android only) | `WORKS` | `MusicAppWidgetProvider`: artwork, metadata, transport dispatch to `MusicPlaybackService`; verified in `dumpsys appwidget`. 1.1.0 caps artwork at 256px before parceling (code-only). | — |
+| Mini-player → Now Playing morph | — (Android only) | `UNVERIFIED` | 1.1.0 WAAPI FLIP morph in code (fade fallback for reduced motion); not seen on device | A-101 |
+| Haptics | — (Android only) | `UNVERIFIED` | 1.1.0: typed bridge `haptic(kind)` + `navigator.vibrate` fallback at tab/press/swipe/long-press/action moments; not felt on device | — |
+| Memory-pressure handling | — (Android only) | `UNVERIFIED` | 1.1.0: `onTrimMemory` → JS hook drops palette/ambient caches; 60s `memoryInfo` polling; low-memory first-run defaults. Not exercised on device | A-501 |
+| Sleep timer | `src/stores/sleepTimer.ts` | `WORKS` | Presets 15/30/45/60m + end-of-track; sheet + active pill verified on emulator. 1.1.0 changed the fade to 30s + volume restore (code-only). | — |
 | Keyboard shortcuts | `src/App.tsx` → `useKeyboardShortcuts` | `HIDDEN` | No hardware keyboard assumption | — |
 | Window chrome (min/max/close) | `electron/main.ts` | `HIDDEN` | No window on a phone | — |
 | PiP mini window | `src/pip/PipApp.tsx` | `HIDDEN` | Desktop-only Electron window; not Android PiP | A-311 |
 | Tray / thumbar / media keys | `electron/main.ts`, `scripts/gen-thumbar-icons.mjs` | `WORKS` | Replaced by the Android media notification + `MediaSession` (A-201) | — |
 | Portrait lock | — | `WORKS` (temporary) | Workaround for the 866 dp landscape bug | A-409 |
 | Responsive layout | `@media (max-width: 860px)` | `BROKEN` | One breakpoint; tablets get the wrong layout | A-401 |
-| Edge-to-edge insets | `env(safe-area-inset-*)` in places | `PARTIAL` | Some chrome uses insets; not audited | A-406 |
-| Accounts / cloud sync | `supabase/`, `electron/sync-merge.ts` | `WORKS` | Google sign-in active in Onboarding and Settings | A-310 |
+| Edge-to-edge insets | `env(safe-area-inset-*)` in places | `PARTIAL` | 1.1.0: native edge-to-edge enabled in code (`enableEdgeToEdge` + transparent bars); inset audit + gesture/3-button checks still owed | A-406 |
+| Accounts / cloud sync | `supabase/`, `electron/sync-merge.ts` | `PARTIAL` | Google sign-in works; sync methods return fake success and their UI is hidden — see §5 | A-310 |
 | Backup export / import | `src/views/SettingsView.tsx` → Your data | `HIDDEN` | Needs a file picker and a writer | A-309 |
 | Crash reporting | Electron logs | `MISSING` | No Play Console; needs a local ring buffer | A-504 |
 
@@ -140,17 +148,19 @@ Counted from the rows above (recount when you edit, and keep this honest):
 | Status | Count |
 |---|---|
 | `WORKS` | 37 |
-| `PARTIAL` | 7 |
-| `UNVERIFIED` | 19 |
-| `MISSING` | 3 |
+| `PARTIAL` | 10 |
+| `UNVERIFIED` | 22 |
+| `MISSING` | 2 |
 | `STUB` | 1 |
-| `HIDDEN` | 9 |
+| `HIDDEN` | 12 |
 | `BROKEN` | 1 |
-| **Total rows** | **77** |
+| **Total rows** | **85** |
 
 **Read this as:** playback is done — stream, notification, lock screen, focus, unplug,
-background and upgrade-in-place are all verified on a device. What is left is breadth, not the
-core: layout above phone width (`A-401`), downloads, canvas, and the extra lyric providers.
+background and upgrade-in-place are all verified on a device. What is left is
+verification of the 1.1.0 rebuild (downloads engine, lyrics engine, stream recovery,
+glass retune — all code-only, none on a device yet), layout above phone width (`A-401`),
+and canvas.
 
 ---
 

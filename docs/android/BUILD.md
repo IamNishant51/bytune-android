@@ -25,6 +25,10 @@ the next build will not install over the previous one.
 Gradle **requires JDK 17**; JDK 21+ will fail on AGP 8.2.1. `JAVA_HOME` is not set globally —
 export it per command.
 
+The table above is the Windows workstation. The Muse VM has Node 24 only — no JDK, no
+Android SDK — so no Gradle build can run there. Kotlin changes made outside the
+workstation are verified by the CI workflow (see `docs/android/CI-RELEASE.md`).
+
 ```bash
 export JAVA_HOME="/c/Program Files/Eclipse Adoptium/jdk-17.0.20.101-hotspot"
 export ANDROID_HOME="/c/Users/nisha/AppData/Local/Android/Sdk"
@@ -97,11 +101,15 @@ when in doubt run all four.
 | Install over old build | only if the debug keystore is the same machine | any build signed with the same release key |
 | Suitable for daily use | yes | **yes — this is the delivery artifact** |
 
-**Current state (2026-10-29):** release is signed, minified and verified on device — launches,
-mints a PO token, relays audio `HTTP 206`, posts the media notification, and survives an
-in-place upgrade (v1.0.0 → v1.0.1, data intact). Release APK: **1,273,075 bytes**
-(`1.0.0`); R8 shrank it from 4,047,672 bytes. `apksigner verify --verbose` →
+**State at 2026-10-29 (historical):** release was signed, minified and verified on device —
+launches, mints a PO token, relays audio `HTTP 206`, posts the media notification, and
+survives an in-place upgrade (v1.0.0 → v1.0.1, data intact). Release APK then:
+**1,273,075 bytes** (`1.0.0`); R8 shrank it from 4,047,672 bytes. `apksigner verify --verbose` →
 `Verifies`, v1 + v2 true, `CN=ByTune`, RSA 4096.
+
+**Since:** the shipped 1.0.3 release APK measures 2,422,219 bytes (see `STATUS.md` header).
+1.1.0 / versionCode 5 is set in code but no APK has been built — the signed APK comes from
+CI (`docs/android/CI-RELEASE.md`) or a local `npm run apk`.
 
 **Consequence of minify:** WebView debugging is compiled out, so `chrome://inspect` / CDP is
 unavailable on a release build. Device verification uses `adb` (`dumpsys`, `cmd media_session`,
@@ -180,6 +188,11 @@ buildTypes {
 The `exists()` fallback keeps the build working on a machine without the keystore (CI, another
 dev) instead of failing with a cryptic error.
 
+Note (2026-11-17): the snippet above is a wiring template, not the shipped file. The real
+`android/app/build.gradle` has **no** debug-signing fallback — without `keystore.properties`
+the release build has no `signingConfig` and the APK is unsigned — and `minifyEnabled` is
+`true` (D16), not `false` as the snippet shows. Read the file, not the snippet.
+
 ### 4.3 Build and verify
 
 ```bash
@@ -190,6 +203,9 @@ cd android && ./gradlew.bat assembleRelease --console=plain && cd ..
 
 `apksigner verify` printing the certificate DN is the proof. A silent success is not enough —
 check the DN matches the key you created.
+
+Or build via CI: add the four secrets and run the workflow manually — see
+`docs/android/CI-RELEASE.md`. The same DN check applies to the CI artifact.
 
 ---
 
@@ -206,15 +222,21 @@ Rules:
 
 - Bump `versionCode` on **every** build the owner will install. Android refuses to downgrade.
 - `versionName` is free-form: `1.0`, `1.1`, `1.1-hotfix`.
+- Keep every version site in sync: `android/app/build.gradle` (`versionCode`/`versionName`),
+  `package.json` (`version`), and the fallback strings in `src/mobile/bridge.ts`,
+  `electron/preload.ts` and `src/views/SettingsView.tsx`. The 1.0.1/1.0.3 mismatch (fixed
+  in 1.1.0) happened because `package.json` drifted alone.
 - Record the bump in `STATUS.md`'s Done log with the date.
-- Do not derive either from git tags — there are no tags and the repo is uncommitted.
+- Do not derive either number from git tags — they are set by hand in the files above.
+
+Current: `versionCode 5` / `versionName "1.1.0"` (set 2026-11-17; APK unbuilt).
 
 ---
 
 ## 6. R8 / minify (A-603)
 
 **On in release** (`minifyEnabled true`, `shrinkResources true`,
-`proguard-android-optimize.txt` + `android/app/proguard-rules.pro`). It cut the APK from
+`proguard-android-optimize.txt` + `android/app/proguard-rules.pro`). It cut the 1.0.0 APK from
 4,047,672 to 1,273,075 bytes.
 
 The keep rules that made it work (`android/app/proguard-rules.pro`):
@@ -240,9 +262,10 @@ no-op in the WebView (no crash, no log) — not a build error.
 
 ## 7. APK size and ABIs (A-604)
 
-Current: **1,273,075 bytes** universal release APK (R8 + resource shrinking). Debug is
-4,047,672 bytes. There are no native `.so` files beyond Capacitor's, so ABI splits buy little
-today. Keep one universal APK unless it exceeds ~25 MB.
+Current: **2,422,219 bytes** universal release APK (1.0.3, R8 + resource shrinking). The
+1,273,075-byte figure was the 1.0.0 build. Debug is 4,047,672 bytes. There are no native
+`.so` files beyond Capacitor's, so ABI splits buy little today. Keep one universal APK
+unless it exceeds ~25 MB.
 
 If splits become necessary:
 
@@ -304,14 +327,20 @@ npm run dist:mac     # DMG (see MAC_BUILD_AND_SIGNING.md)
 `npm run build` compiles **both** the renderer and the Electron main process. A change that
 breaks the Electron build is a regression even when the APK builds, because both share `src/`.
 
+Note: this repo holds only the `electron/` modules the renderer compiles directly (types,
+parsers); the desktop app itself lives upstream (`AGENTS.md`). The "Electron main process"
+above does not exist here — what must keep working is the shared `src/` + `electron/`
+compilation that `npm run build` performs.
+
 ---
 
 ## 11. Release checklist (A-605/A-606)
 
-- [ ] `versionCode` bumped
-- [ ] `npx tsc --noEmit` clean, `npm test` 0 failures
+- [ ] `versionCode` bumped, all version sites in sync (§5)
+- [ ] `npx tsc --noEmit` clean (no test suite exists — do not claim `npm test` results; see `TESTING.md` §1)
 - [ ] `npm run build && npx cap sync android`
-- [ ] `assembleRelease` succeeds, `apksigner verify` shows the expected DN
+- [ ] `assembleRelease` succeeds (locally or via CI), `apksigner verify` shows the expected DN
 - [ ] Install **over** the previous build — data intact (A-606)
 - [ ] Clean-device install: onboarding → guest → play → background → notification → offline (A-605)
 - [ ] APK copied somewhere the owner can reach it, path recorded in `STATUS.md`
+- [ ] Release created as DRAFT until a verified installable APK exists; publish only with the APK attached

@@ -37,7 +37,8 @@ Two consequences worth stating plainly:
    gone, three panes squeezed into 364 dp of height.
 2. **Edge-to-edge is enforced at targetSdk 35.** System bars become transparent and the app is
    drawn behind them, so every chrome edge needs insets. The build is on targetSdk 34 today;
-   A-406 prepares for the move.
+   system edge-to-edge is implemented in code since 1.1.0 (`enableEdgeToEdge` + transparent
+   bars, unverified on device); A-406's device checks still settle it.
 
 ---
 
@@ -82,7 +83,7 @@ One rule per class. Anything not listed inherits the class below it.
 |---|---|
 | Top bar | 52 dp + `env(safe-area-inset-top)`, back arrow · brand · account disc |
 | Content | Single column, full width, `padding: 0 16px`, scrolls under the top bar |
-| Navigation | Five-tab bottom bar, 56 dp + `env(safe-area-inset-bottom)` |
+| Navigation | Four-tab bottom bar, 56 dp + `env(safe-area-inset-bottom)` |
 | Mini player | Above the nav bar, artwork 40 dp, title/artist two lines, prev/play/next |
 | Now Playing | **Full-screen sheet**, drag-down to dismiss, drag-up for queue |
 | Queue | Sheet inside Now Playing, half → full height |
@@ -154,7 +155,10 @@ Rules:
 | Keyboard | The search field must stay visible when the IME opens — `interactive-widget=resizes-content` in the viewport meta, or rely on Capacitor's resize mode; verify on device |
 
 `index.html` already has `viewport-fit=cover`. That is necessary but not sufficient: every
-fixed element needs its own inset.
+fixed element needs its own inset. The native side enables edge-to-edge since 1.1.0
+(`MainActivity.enableEdgeToEdge()`, transparent status/nav bars in `styles.xml`) — the
+inset rules above are what keep content out from under the bars once the system draws
+behind them.
 
 ---
 

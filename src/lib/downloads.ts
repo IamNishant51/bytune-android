@@ -5,6 +5,10 @@ import { useUI } from "../stores/ui";
 import type { Track } from "../types";
 import { requireBridge } from "./bridge";
 import { staleDownloadIds } from "./download-reconcile";
+import { isLowMemoryDevice } from "./device";
+import { isAndroid } from "./platform";
+import { fmtBytes } from "./format";
+import { cancelOfflineDownload, enforceOfflineStorageCap } from "../mobile/offline";
 
 export function getDownload(id: string): DownloadItem | undefined {
   return useLibrary.getState().downloads[id];
@@ -20,6 +24,14 @@ export async function startDownload(track: Track, dirOverride?: string): Promise
   if (existing?.status === "downloading" || existing?.status === "queued") return;
   if (existing?.status === "done") {
     useUI.getState().toast("Already downloaded — see the Downloads view", "info");
+    return;
+  }
+
+  // Android downloads go through the bounded FIFO queue below: the bridge
+  // call is fire-and-forget, so without the queue a playlist download
+  // would start every track at once (D-04).
+  if (isAndroid) {
+    enqueueDownload(track);
     return;
   }
 
@@ -47,8 +59,235 @@ export async function startDownload(track: Track, dirOverride?: string): Promise
 }
 
 export function cancelDownload(id: string): void {
+  // Drop queued work and stop the engine for active work. The bridge call
+  // below still runs: for a finished download it deletes the stored blob
+  // (the Downloads view delete flow), and for an active one it aborts the
+  // bridge-side controller (Track B wires it to cancelOfflineDownload).
+  // cancelQueuedDownload deliberately never calls the bridge itself, so
+  // bridge.cancelDownload can delegate to it without recursing.
+  if (isAndroid) cancelQueuedDownload(id);
   void window.bytune?.cancelDownload(id);
   useLibrary.getState().patchDownload(id, { status: "failed", progress: 0 });
+}
+
+/* ------------------------------------------------------------------ */
+/* Bounded FIFO download queue (Android, D-04)                         */
+/*                                                                     */
+/* The bridge's startDownload returns as soon as the download is       */
+/* launched, so serializing here is the only thing standing between a   */
+/* 43-track playlist download and 43 concurrent downloads + 43 lyric   */
+/* fetches. Concurrency is 2, or 1 on low-memory devices. A slot is    */
+/* released by the terminal download event (done/failed/cancelled) —   */
+/* the same events DownloadsView and PlaylistView already subscribe    */
+/* to, with unchanged names and payloads.                              */
+/*                                                                     */
+/* CONTRACT with Track B (bridge delegation — read carefully): the     */
+/* bridge's startDownload delegates to enqueueDownload, and the queue  */
+/* pump launches a claimed slot by calling window.bytune.startDownload */
+/* again. That re-entrant call MUST reach performMobileDownload        */
+/* directly: the bridge must check getDownloadQueueState() and, when   */
+/* the id already holds an active slot, run the executor instead of    */
+/* delegating back to enqueueDownload (whose queued-row guard would    */
+/* no-op, stalling the slot forever with no terminal event). Without   */
+/* that branch every download stalls silently; the launch watchdog in  */
+/* runQueuedDownload turns the stall into a loud failure instead. The  */
+/* bridge may delegate cancelDownload to cancelQueuedDownload +        */
+/* cancelOfflineDownload (no recursion: cancelQueuedDownload never     */
+/* calls the bridge).                                                  */
+/* ------------------------------------------------------------------ */
+
+export interface DownloadQueueState {
+  /** Ids waiting for a slot, in FIFO order. */
+  pending: string[];
+  /** Ids holding a slot (launched, awaiting a terminal event). */
+  active: string[];
+}
+
+const pendingQueue: Track[] = [];
+const activeDownloadIds = new Set<string>();
+let queueEventListenerInstalled = false;
+
+/** Ids whose `start` event arrived — the launch watchdog's signal that
+ *  the bridge actually executed the download instead of delegating into
+ *  a no-op. Cleaned up on terminal events and cancels. */
+const launchedDownloadIds = new Set<string>();
+const launchWaiters = new Map<string, Set<(launched: boolean) => void>>();
+
+function resolveLaunchWaiters(id: string, launched: boolean): void {
+  const waiters = launchWaiters.get(id);
+  if (!waiters) return;
+  launchWaiters.delete(id);
+  for (const resolve of waiters) resolve(launched);
+}
+
+function queueConcurrencyLimit(): number {
+  return isLowMemoryDevice() ? 1 : 2;
+}
+
+export function getDownloadQueueState(): DownloadQueueState {
+  return { pending: pendingQueue.map((t) => t.id), active: [...activeDownloadIds] };
+}
+
+function ensureQueueEventListener(): void {
+  if (queueEventListenerInstalled) return;
+  // The queue lives for the app lifetime; this subscription is never
+  // removed. Terminal events release the slot and pump the next item.
+  // Releasing is idempotent: a cancelled download may already have been
+  // removed from the active set by cancelQueuedDownload. The flag is set
+  // only when a subscription actually installed, so a bridge that appears
+  // later still gets subscribed on the next enqueue/pump.
+  const off = window.bytune?.onDownloadEvent?.((e) => {
+    if (e.type === "start") {
+      launchedDownloadIds.add(e.id);
+      resolveLaunchWaiters(e.id, true);
+      return;
+    }
+    if (e.type === "done" || e.type === "failed" || e.type === "cancelled") {
+      launchedDownloadIds.delete(e.id);
+      resolveLaunchWaiters(e.id, false);
+      if (activeDownloadIds.delete(e.id)) void pumpDownloadQueue();
+    }
+  });
+  if (off) queueEventListenerInstalled = true;
+}
+
+/** Enqueue one track. Duplicate, in-flight, and already-downloaded tracks
+ *  are ignored, matching startDownload's guards. */
+export function enqueueDownload(track: Track): void {
+  const lib = useLibrary.getState();
+  const existing = lib.downloads[track.id];
+  if (existing?.status === "downloading" || existing?.status === "queued") return;
+  if (existing?.status === "done") {
+    useUI.getState().toast("Already downloaded — see the Downloads view", "info");
+    return;
+  }
+  if (pendingQueue.some((t) => t.id === track.id) || activeDownloadIds.has(track.id)) return;
+  lib.setDownload(track.id, {
+    track,
+    path: existing?.path ?? null,
+    status: "queued",
+    progress: 0,
+    downloaded: 0,
+    total: 0,
+  });
+  pendingQueue.push(track);
+  ensureQueueEventListener();
+  void pumpDownloadQueue();
+}
+
+/**
+ * Cancel queued or active work. A pending item is dropped without ever
+ * starting. An active item is released from its slot immediately (so a
+ * retry can re-enqueue it) and the engine is told to stop; the terminal
+ * event that follows is a harmless no-op for the queue. Never calls the
+ * bridge — see the contract note above.
+ */
+export function cancelQueuedDownload(id: string): void {
+  const pendingIndex = pendingQueue.findIndex((t) => t.id === id);
+  if (pendingIndex !== -1) {
+    pendingQueue.splice(pendingIndex, 1);
+    useLibrary.getState().patchDownload(id, { status: "failed", progress: 0 });
+    return;
+  }
+  if (activeDownloadIds.has(id)) {
+    activeDownloadIds.delete(id);
+    launchedDownloadIds.delete(id);
+    resolveLaunchWaiters(id, false);
+    cancelOfflineDownload(id);
+    void pumpDownloadQueue();
+  }
+}
+
+async function pumpDownloadQueue(): Promise<void> {
+  ensureQueueEventListener();
+  const limit = queueConcurrencyLimit();
+  while (activeDownloadIds.size < limit && pendingQueue.length > 0) {
+    const next = pendingQueue.shift();
+    if (!next) break;
+    // Skip rows that finished or were removed while waiting in line.
+    if (useLibrary.getState().downloads[next.id]?.status === "done") continue;
+    activeDownloadIds.add(next.id);
+    void runQueuedDownload(next);
+  }
+}
+
+async function runQueuedDownload(track: Track): Promise<void> {
+  try {
+    await enforceStorageCapBeforeDownload();
+    launchedDownloadIds.delete(track.id);
+    await requireBridge().startDownload(track);
+    // Launch watchdog: the bridge must emit `start` once it executes the
+    // download. If it delegated back into the queue instead (the Track B
+    // executor branch is missing), no `start` ever arrives — fail loudly
+    // and free the slot instead of stalling the whole queue. A cancel in
+    // the meantime removes the id from the active set first, so the
+    // failure branch below stays silent for user cancels.
+    const launched = await waitForLaunch(track.id, 10000);
+    if (!launched && activeDownloadIds.delete(track.id)) {
+      useLibrary.getState().patchDownload(track.id, { status: "failed", progress: 0 });
+      useUI.getState().toast("Download failed to start — please retry.", "error");
+      void pumpDownloadQueue();
+    }
+    // Completion arrives as a download event, which releases the slot.
+  } catch (err) {
+    // Only the bridge call itself can reject here; engine failures arrive
+    // as `failed` events and release the slot through the listener.
+    activeDownloadIds.delete(track.id);
+    launchedDownloadIds.delete(track.id);
+    resolveLaunchWaiters(track.id, false);
+    useLibrary.getState().patchDownload(track.id, { status: "failed", progress: 0 });
+    useUI.getState().toast(
+      `Download failed: ${err instanceof Error ? err.message : "unknown error"}`,
+      "error"
+    );
+    void pumpDownloadQueue();
+  }
+}
+
+/** Resolves true when the `start` event for `id` arrives, false after
+ *  `timeoutMs` without one. A `start` that arrived before the wait began
+ *  resolves immediately. */
+function waitForLaunch(id: string, timeoutMs: number): Promise<boolean> {
+  if (launchedDownloadIds.has(id)) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    let existing = launchWaiters.get(id);
+    if (!existing) {
+      existing = new Set();
+      launchWaiters.set(id, existing);
+    }
+    const waiterSet: Set<(launched: boolean) => void> = existing;
+    const wrapped = (launched: boolean): void => {
+      clearTimeout(timer);
+      resolve(launched);
+    };
+    const timer = setTimeout(() => {
+      waiterSet.delete(wrapped);
+      resolve(false);
+    }, timeoutMs);
+    waiterSet.add(wrapped);
+  });
+}
+
+/** Before a download starts, evict least-recently-played downloads while
+ *  the library is over the storage cap. Liked tracks are never evicted.
+ *  Evictions are explained with a toast naming what was removed.
+ *  Accounting failures never block the download. */
+async function enforceStorageCapBeforeDownload(): Promise<void> {
+  try {
+    const likedIds = new Set(useLibrary.getState().liked.map((t) => t.id));
+    const { evictedIds, freedBytes } = await enforceOfflineStorageCap((id) => likedIds.has(id));
+    if (evictedIds.length === 0) return;
+    const lib = useLibrary.getState();
+    const titles = evictedIds.map((id) => lib.downloads[id]?.track.title ?? id);
+    for (const id of evictedIds) lib.removeDownload(id);
+    const named = titles.length === 1 ? `"${titles[0]}"` : `"${titles[0]}" and ${titles.length - 1} more`;
+    useUI.getState().toast(
+      `Storage cap reached: removed ${named} (${fmtBytes(freedBytes)} freed) — oldest unliked downloads go first. Liked downloads are never removed.`,
+      "warning"
+    );
+  } catch {
+    /* storage accounting must never block a download */
+  }
 }
 
 /**
@@ -209,8 +448,15 @@ export function listenForDownloadProgress(): () => void {
     } else if (e.type === "failed") {
       buffer.flush(e.id);
       lib.patchDownload(e.id, { status: "failed", progress: 0 });
-      if (!checkBatchItem(e.id, false)) {
-        useUI.getState().toast(`Download failed: ${e.reason ?? "unknown error"}`, "error");
+      // A full disk is actionable, not generic: say so even inside a
+      // batch, and point at the Downloads view where space is managed.
+      const reason = e.reason ?? "unknown error";
+      const storageFull = reason.startsWith("Storage full");
+      if (storageFull) {
+        useUI.getState().toast(`${reason} Manage downloads in the Downloads view.`, "error");
+      }
+      if (!checkBatchItem(e.id, false) && !storageFull) {
+        useUI.getState().toast(`Download failed: ${reason}`, "error");
       }
     } else if (e.type === "cancelled") {
       buffer.flush(e.id);

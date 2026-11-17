@@ -745,7 +745,12 @@ function EqualizerStrip() {
 }
 
 export function Onboarding({ initial }: { initial: Screen }) {
-  const [screen, setScreen] = useState<Screen>(initial);
+  // Username + password auth throws on Android (the bridge only offers
+  // Google sign-in + guest) — an intent routing here, e.g. from the guest
+  // delete-protection modal's "Sign in" / "Create account" actions, must
+  // land on the chooser, never on a dead-end form.
+  const safeInitial: Screen = isMobileApp && (initial === "signup" || initial === "signin") ? "choose" : initial;
+  const [screen, setScreen] = useState<Screen>(safeInitial);
   const [dir, setDir] = useState<"fwd" | "back">("fwd");
   const navigate = (s: Screen, d: "fwd" | "back" = "fwd"): void => {
     setDir(d);

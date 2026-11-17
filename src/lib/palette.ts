@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { loadArtworkImage } from "./ambient";
+import { upgradeArtwork } from "./artwork";
 
 export interface ArtworkPalette {
   /** CSS `R G B` triplet strings — consumed as `rgb(var(--page-bg) / <a>)`. */
@@ -37,6 +38,21 @@ interface Seed {
 const SEED_CACHE_ENTRIES = 128;
 const seedCache = new Map<string, Seed>();
 
+/* In-flight extractions, keyed by the same URL as the cache: two mounts
+   asking for the same artwork at once (backdrop crossfade layers + the page
+   palette) share one decode instead of each decoding the image. Entries are
+   removed as soon as they settle, so a failed extraction is retried. */
+const pendingSeeds = new Map<string, Promise<Seed | null>>();
+
+/**
+ * Drop cached seeds (memory-pressure response). In-flight extractions are
+ * left alone — they settle into an empty cache instead of triggering a
+ * duplicate decode.
+ */
+export function clearPaletteCaches(): void {
+  seedCache.clear();
+}
+
 /** Read size for the quantiser. 128² is enough; the blur hides the upscale. */
 const PALETTE_PX = 128;
 /** Mobile's crossfade when the page is settling into a colour. */
@@ -55,7 +71,12 @@ const TINT_FADE_MS = 260;
  *    enough to lose the picture leaves behind at that edge.
  */
 async function seedOf(url: string): Promise<Seed | null> {
-  const loaded = await loadArtworkImage(url);
+  // Extraction reads a 128px canvas, so a small rendition is all it ever
+  // needs — requesting the 544/1200px display URL would decode 16-88x more
+  // pixels for identical output. Keyed by the caller's URL (the cache key),
+  // decoded from the small rendition.
+  const small = upgradeArtwork(url, 160) || url;
+  const loaded = await loadArtworkImage(small);
   if (!loaded) return null;
   const { image: img, cleanup } = loaded;
   try {
@@ -158,6 +179,30 @@ async function seedOf(url: string): Promise<Seed | null> {
 }
 
 /* ============================================================ HSL clamp */
+
+/**
+ * One shared extraction per URL: cache hit, in-flight promise, or a fresh
+ * extraction that is cached (bounded, eldest-evicted) when it lands.
+ */
+function getSeed(url: string): Promise<Seed | null> {
+  const known = seedCache.get(url);
+  if (known) return Promise.resolve(known);
+  const pending = pendingSeeds.get(url);
+  if (pending) return pending;
+  const run = seedOf(url).then((seed) => {
+    pendingSeeds.delete(url);
+    if (seed) {
+      if (seedCache.size >= SEED_CACHE_ENTRIES) {
+        const oldest = seedCache.keys().next().value;
+        if (oldest) seedCache.delete(oldest);
+      }
+      seedCache.set(url, seed);
+    }
+    return seed;
+  });
+  pendingSeeds.set(url, run);
+  return run;
+}
 
 interface HSL {
   h: number;
@@ -324,14 +369,8 @@ export function useArtworkPalette(
       return;
     }
     let cancelled = false;
-    void seedOf(url).then((seed) => {
+    void getSeed(url).then((seed) => {
       if (cancelled || !seed) return;
-      // Bound the cache.
-      if (seedCache.size >= SEED_CACHE_ENTRIES) {
-        const oldest = seedCache.keys().next().value;
-        if (oldest) seedCache.delete(oldest);
-      }
-      seedCache.set(url, seed);
       setPalette(seedToPalette(seed, dark));
     });
     return () => {

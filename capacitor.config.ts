@@ -16,6 +16,10 @@ const config: CapacitorConfig = {
   android: {
     allowMixedContent: true,
     backgroundColor: "#000000",
+    // Floor for the modern CSS/APIs the renderer uses (View Transitions,
+    // color-mix, :has). Capacitor only logs on older WebViews — it does not
+    // block — so feature detection is still required wherever it matters.
+    minWebViewVersion: 111,
   },
 };
 

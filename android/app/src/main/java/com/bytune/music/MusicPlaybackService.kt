@@ -39,6 +39,9 @@ class MusicPlaybackService : Service() {
         private const val TAG = "ByTuneMediaSession"
         const val CHANNEL_ID = "bytune_playback"
         const val NOTIFICATION_ID = 4001
+        // Notification large icons display small; decoding beyond this wastes
+        // native pixel memory in the service process on a 4 GB phone.
+        private const val MAX_ARTWORK_PX = 512
 
         const val ACTION_PLAY = "com.bytune.music.ACTION_PLAY"
         const val ACTION_PAUSE = "com.bytune.music.ACTION_PAUSE"
@@ -61,6 +64,19 @@ class MusicPlaybackService : Service() {
     private var currentDurationSec = 0.0
     private var currentPositionSec = 0.0
     private var isPlaying = false
+    private var currentPlaybackRate = 1.0f
+
+    // Last inputs the notification/widget were actually built with. JS syncs
+    // every 2.5s while playing; rebuilding the notification and re-parceling
+    // the widget on every sync is wasted work when nothing visible changed.
+    // The PlaybackState below is NOT gated — the lock-screen scrubber must
+    // keep moving — only the metadata/notification/widget rebuild is.
+    private var lastBuiltTitle: String? = null
+    private var lastBuiltArtist: String? = null
+    private var lastBuiltAlbum: String? = null
+    private var lastBuiltPlaying: Boolean? = null
+    private var lastBuiltArtwork: Bitmap? = null
+    private var lastBuiltPositionBucket: Long? = null
 
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -95,7 +111,8 @@ class MusicPlaybackService : Service() {
                 val duration = intent.getDoubleExtra("duration", currentDurationSec)
                 val position = intent.getDoubleExtra("position", currentPositionSec)
                 val playing = intent.getBooleanExtra("isPlaying", isPlaying)
-                updatePlayback(title, artist, album, artworkUrl, duration, position, playing)
+                val playbackRate = intent.getFloatExtra("playbackRate", currentPlaybackRate)
+                updatePlayback(title, artist, album, artworkUrl, duration, position, playing, playbackRate)
             }
         }
         return START_NOT_STICKY
@@ -144,7 +161,8 @@ class MusicPlaybackService : Service() {
         artworkUrl: String,
         duration: Double,
         position: Double,
-        playing: Boolean
+        playing: Boolean,
+        playbackRate: Float = 1.0f
     ) {
         val titleChanged = title != currentTitle || artist != currentArtist
         val artworkChanged = artworkUrl.isNotEmpty() && artworkUrl != currentArtworkUrl
@@ -156,6 +174,7 @@ class MusicPlaybackService : Service() {
         currentDurationSec = duration
         currentPositionSec = position
         isPlaying = playing
+        currentPlaybackRate = if (playbackRate.isFinite() && playbackRate > 0f) playbackRate else 1.0f
 
         if (playing) {
             registerNoisyReceiver()
@@ -170,13 +189,28 @@ class MusicPlaybackService : Service() {
                 try {
                     val url = URL(artworkUrl)
                     val conn = url.openConnection() as HttpURLConnection
-                    conn.connectTimeout = 5000
-                    conn.readTimeout = 5000
-                    conn.connect()
-                    val bmp = BitmapFactory.decodeStream(conn.inputStream)
-                    if (bmp != null) {
-                        currentArtworkBitmap = bmp
-                        updateSessionAndNotification()
+                    try {
+                        conn.connectTimeout = 5000
+                        conn.readTimeout = 5000
+                        conn.connect()
+                        val bytes = conn.inputStream.use { it.readBytes() }
+                        val bmp = decodeArtwork(bytes, MAX_ARTWORK_PX)
+                        if (bmp != null) {
+                            val previous = currentArtworkBitmap
+                            currentArtworkBitmap = bmp
+                            updateSessionAndNotification()
+                            // The notification/widget now hold the new bitmap
+                            // (parceled copies); free the old pixels now
+                            // instead of waiting for the GC finalizer. Only
+                            // recycle when nothing newer replaced it meanwhile.
+                            if (previous != null && previous !== bmp &&
+                                currentArtworkBitmap === bmp && !previous.isRecycled
+                            ) {
+                                previous.recycle()
+                            }
+                        }
+                    } finally {
+                        conn.disconnect()
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to load artwork bitmap: ${e.message}")
@@ -187,13 +221,33 @@ class MusicPlaybackService : Service() {
         updateSessionAndNotification()
     }
 
+    /**
+     * Decodes artwork bytes sampled down so the longest side is at most
+     * [maxPx]. Power-of-two sampling (the only size class honoured on all
+     * API levels), so a 1200px source lands near 300px — plenty for a
+     * notification icon. Null when the bytes are not a decodable image.
+     */
+    private fun decodeArtwork(bytes: ByteArray, maxPx: Int): Bitmap? {
+        if (bytes.isEmpty()) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        val largest = maxOf(bounds.outWidth, bounds.outHeight)
+        while (largest / sample > maxPx) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    }
+
     fun clearPlayback() {
         isPlaying = false
         unregisterNoisyReceiver()
+        val oldBitmap = currentArtworkBitmap
         currentArtworkBitmap = null
         currentArtworkUrl = ""
         currentTitle = ""
         currentArtist = ""
+        resetBuiltCache()
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -212,7 +266,18 @@ class MusicPlaybackService : Service() {
         } catch (e: Exception) {
             Log.w(TAG, "Error clearing widgets: ${e.message}")
         }
+        // The widget now holds no artwork; free the old pixels.
+        if (oldBitmap != null && !oldBitmap.isRecycled) oldBitmap.recycle()
         stopSelf()
+    }
+
+    private fun resetBuiltCache() {
+        lastBuiltTitle = null
+        lastBuiltArtist = null
+        lastBuiltAlbum = null
+        lastBuiltPlaying = null
+        lastBuiltArtwork = null
+        lastBuiltPositionBucket = null
     }
 
     private fun updateSessionAndNotification() {
@@ -229,9 +294,27 @@ class MusicPlaybackService : Service() {
         val state = if (isPlaying) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED
         val playbackState = PlaybackState.Builder()
             .setActions(stateActions)
-            .setState(state, (currentPositionSec * 1000).toLong(), 1.0f)
+            .setState(state, (currentPositionSec * 1000).toLong(), currentPlaybackRate)
             .build()
         session.setPlaybackState(playbackState)
+
+        // Skip the expensive rebuild when nothing visible changed. Position
+        // is bucketed (5s): the scrubber above already moves every sync, so
+        // the notification/widget need not rebuild for every position tick.
+        val positionBucket = (currentPositionSec / 5).toLong()
+        val visibleChanged = currentTitle != lastBuiltTitle ||
+            currentArtist != lastBuiltArtist ||
+            currentAlbum != lastBuiltAlbum ||
+            isPlaying != lastBuiltPlaying ||
+            currentArtworkBitmap !== lastBuiltArtwork ||
+            positionBucket != lastBuiltPositionBucket
+        if (!visibleChanged) return
+        lastBuiltTitle = currentTitle
+        lastBuiltArtist = currentArtist
+        lastBuiltAlbum = currentAlbum
+        lastBuiltPlaying = isPlaying
+        lastBuiltArtwork = currentArtworkBitmap
+        lastBuiltPositionBucket = positionBucket
 
         // 2. Update MediaMetadata
         val metadataBuilder = MediaMetadata.Builder()

@@ -12,9 +12,16 @@
  * `shortcut: no YouTube captions/lyrics-tab source on Android yet, add them to
  * src/mobile/innertube.ts when a track disappears on the HTTP providers.`
  */
-import { fetchLyrics } from "../lib/lyricsEngine";
 import type { LyricsResult } from "../types";
 import { getOfflineLyrics, saveOfflineLyrics, hasOfflineBlob } from "./offline";
+
+// The engine loads on the first lyrics request, not at boot: it is fourteen
+// providers' worth of parsing code that most sessions never touch. The
+// dynamic import is cached by the module loader, so later requests pay
+// nothing extra.
+async function loadEngine(): Promise<typeof import("../lib/lyricsEngine")> {
+  return import("../lib/lyricsEngine");
+}
 
 const cache = new Map<string, Promise<LyricsResult | null>>();
 
@@ -36,17 +43,20 @@ export async function getLyrics(meta: {
     return offline;
   }
 
-  const run = fetchLyrics(
-    {
-      id: meta.id,
-      title: meta.title ?? "",
-      artist: meta.artist ?? "",
-      album: meta.album,
-      duration: Number.isFinite(meta.duration) ? Math.round(meta.duration ?? 0) : 0,
-    },
-    { prioritizeWordSync: true },
-    {},
-  )
+  const run = loadEngine()
+    .then((engine) =>
+      engine.fetchLyrics(
+        {
+          id: meta.id,
+          title: meta.title ?? "",
+          artist: meta.artist ?? "",
+          album: meta.album,
+          duration: Number.isFinite(meta.duration) ? Math.round(meta.duration ?? 0) : 0,
+        },
+        { prioritizeWordSync: true },
+        {}
+      )
+    )
     .then(async (r): Promise<LyricsResult | null> => {
       const result: LyricsResult | null = r
         ? { synced: r.synced, plain: r.plain, source: r.source, wordSynced: r.wordSynced }
