@@ -1,9 +1,9 @@
 # STATUS — the board
 
 **Last updated:** 2026-11-17
-**Build under test:** **release APK**, `android/app/build/outputs/apk/release/app-release.apk`, 2,422,219 bytes, `versionCode 4` / `versionName 1.0.3`, signed `CN=ByTune` (SHA-256 `d2104277…`)
+**Build under test:** **release APK**, 2,422,219 bytes, `versionCode 4` / `versionName 1.0.3`, signed `CN=ByTune` (SHA-256 `d2104277…`)
 **Device:** emulator AVD `bytune` (Pixel 6, 1080×2400, density 2.625 → 412 dp wide, portrait), audio enabled
-**1.1.0 (versionCode 5): implemented in code 2026-11-17, NOT built — no APK exists, no device run has happened. Do not cite 1.1.0 as tested.** See "1.1.0 rebuild" below. The signed APK comes from CI (`docs/android/CI-RELEASE.md`) or a local `npm run apk`.
+**1.1.0 (versionCode 5): a signed CI APK exists (draft release `v1.1.0`, 2,464,708 bytes, same certificate as 1.0.3) but has NOT been installed or run on any device. Do not cite 1.1.0 behaviour as tested.** See "1.1.0 rebuild" and "1.1.0 release state" below.
 
 This is the only place that says what is done. If you change behaviour and do not update
 this file, the change is not done (`AGENTS.md` §6, gate G6).
@@ -211,9 +211,12 @@ of it may be cited as working until the UNVERIFIED rows below are settled on a d
 
 ### 1.1.0 release state
 
-Draft release only — no verified installable APK exists. First CI run should be manual
-dispatch (artifact only) before tagging. See `docs/android/CI-RELEASE.md` and the release
-notes on the draft.
+Draft release `v1.1.0` on `github.com/IamNishant51/bytune-android` carries a CI-built
+signed `app-release.apk` (2,464,708 bytes, `versionCode 5` / `1.1.0`, certificate SHA-256
+`d2104277…` — identical to the installed 1.0.3 key, so it upgrades in place). The draft is
+unpublished on purpose; publishing it is what makes the download link live. Nothing is
+installed yet: install-over-1.0.3 with data intact is still owed (A-606). See
+`docs/android/CI-RELEASE.md`.
 
 ---
 
@@ -262,7 +265,7 @@ Each row names the command that would settle it. Do not claim these work.
 | 1.1.0 notification / widget | Change-gated rebuild, ≤512px/≤256px artwork, last-known track, deny-once flag — code only, Kotlin uncompiled | Play/pause/next from notification + widget; deny notifications permanently, restart, confirm no re-prompt; widget after reboot |
 | 1.1.0 sleep-timer fade | 30s fade + volume restore — code only | Set a 15m timer, listen for the fade, confirm volume restores |
 | 1.1.0 lyrics engine | 14-provider engine + word-level sync — code only | 5 tracks side by side with the desktop (A-304); offline cached lyrics |
-| CI workflow + upgrade | Workflow YAML parses, never executed; no 1.1.0 APK exists | Manual dispatch first (artifact only); `apksigner verify` DN check; install over 1.0.3, data intact (A-606) |
+| CI workflow + upgrade | Workflow executed on tag `v1.1.0` (run 44110934582, every step green): signed `app-release.apk` 2,464,708 bytes, `versionCode 5` / `1.1.0`, `apksigner` DN `CN=ByTune` + SHA-256 `d2104277…` equal to the 1.0.3 key, draft release created | Install over 1.0.3, data intact (A-606); any run on a real phone |
 | Cold start / FPS / memory | No figures exist for any build; "60fps" was never measured | A-501: cold start, scroll FPS, PSS foreground/background on the 4 GB phone |
 
 ---
@@ -288,6 +291,23 @@ Each row names the command that would settle it. Do not claim these work.
 ---
 
 ## Done log
+
+### 2026-11-17 — signed 1.1.0 APK built in CI (draft release, not installed)
+
+- Four repository secrets set on `IamNishant51/bytune-android` (`KEYSTORE_BASE64`,
+  `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`) from the local
+  `android/keystore.properties`, encoded once by hand. No secret value is in the tree, in
+  the workflow, or in this file.
+- Tag `v1.1.0` on `dede35e` → workflow run 44110934582: verify-secrets, `npm ci`,
+  `npm run build` (typecheck + vite), `cap sync android`, keystore decode, `assembleRelease`,
+  artifact upload, draft release — all green.
+- `apksigner verify --print-certs` on the downloaded APK: `CN=ByTune`, SHA-256
+  `d21042775df437feb9888d49b69ed02afdca6182b22a6215909f46bf701a6648`, i.e. the same key as
+  `ByTune-1.0.3.apk`. `aapt2 dump badging`: `com.bytune.music`, `versionCode 5`,
+  `versionName 1.1.0`.
+- NOT done: no install, no device or emulator run of 1.1.0 (the emulator still runs the
+  debug build, a different signing key); the release stays a draft until the owner
+  publishes it.
 
 ### 2026-11-17 — 1.1.0 rebuild implemented (unverified), doc pass, versions reconciled
 
