@@ -33,6 +33,9 @@ class PoTokenMinter(private val context: Context) {
     private companion object {
         const val TAG = "ByTunePoToken"
         const val REQUEST_KEY = "O43z0dpjhgX20SCx4KAo"
+        // Public web-client key for YouTube's InnerTube and BotGuard endpoints (the same
+        // value ships in the upstream public project). GitHub secret scanning flags it;
+        // it is not a credential this project owns and cannot be rotated here.
         const val GOOG_API_KEY = "AIzaSyDyT5W0Jh49F30Pqqtyfdf7pDLFKLJoAnw"
         const val UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
